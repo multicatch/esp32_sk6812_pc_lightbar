@@ -104,10 +104,7 @@ fn main() -> windows::core::Result<()> {
     }
 
     thread::spawn(move || {
-        let mut port = serialport::new("COM3", 115_200)
-            .timeout(Duration::from_millis(500))
-            .open();
-
+        let mut port = try_connect_to_com();
         let mut last_sleep = Instant::now();
 
         while let Ok(command) = rx.recv() {
@@ -133,9 +130,11 @@ fn main() -> windows::core::Result<()> {
         }
     });
 
+    tx.send(LedbarCommand::Wake).unwrap(); // first heartbeat
+
     thread::spawn(move || {
         loop {
-            sleep(Duration::from_millis(500));
+            sleep(Duration::from_secs(2));
             tx.send(LedbarCommand::Wake).unwrap();
         }
     });
@@ -154,10 +153,14 @@ fn retry_if_closed(port: Result<Box<dyn SerialPort>, Error>) -> Result<Box<dyn S
     if port.is_ok() {
         port
     } else {
-        serialport::new("COM3", 115_200)
-            .timeout(Duration::from_millis(500))
-            .open()
+        try_connect_to_com()
     }
+}
+
+fn try_connect_to_com() -> Result<Box<dyn SerialPort>, Error> {
+    serialport::new("COM3", 115_200)
+        .timeout(Duration::from_millis(500))
+        .open()
 }
 
 fn write_if_possible(con: &mut Box<dyn SerialPort>, command: LedbarCommand) -> Result<(), Error> {
