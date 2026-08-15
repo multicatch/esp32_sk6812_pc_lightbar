@@ -8,4 +8,4 @@ To build this sketch, you need to add [AxlRocket/ESP32_SK6812](https://github.co
 3. In Arduino IDE: Sketch -> Include Library -> Add .ZIP Library
 4. Include the library in your project using "#include <SK6812.h>" directive
 
-Select `ESP32-C3 DevKit` as your board and **enable USB CDC on Boot**
+Select `ESP32-C3 DevKit` as your board and **enable USB CDC on Boot**. This option is required for the [Rust agent](../esp32_sk6812_lightbar_agent) to work.
