@@ -11,3 +11,8 @@ The project assumes your USB port powers the ESP32 even if your PC is shut down.
 
 ## Pictures of my implementation
 
+![Working example](./pic/lightbar.gif)
+
+![SK6812 LED strip](./pic/sk6812.jpeg)
+
+![ESP32-C3](./pic/esp32inside.jpeg)
