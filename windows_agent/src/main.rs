@@ -1,7 +1,7 @@
 #![windows_subsystem = "windows"]
 
-use serialport::{Error, SerialPort};
-use std::io::Write;
+use serialport::{Error, SerialPort, SerialPortInfo};
+use std::io::{ErrorKind, Read, Write};
 use std::sync::mpsc;
 use std::sync::mpsc::Sender;
 use std::thread;
@@ -11,12 +11,16 @@ use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::{
     CREATESTRUCTW, CreateWindowExW, DefWindowProcW, DispatchMessageW, GWLP_USERDATA, GetMessageW,
-    GetWindowLongPtrW, MSG, PBT_APMSUSPEND, RegisterClassW, SetWindowLongPtrW, WINDOW_EX_STYLE,
-    WM_ENDSESSION, WM_NCCREATE, WM_POWERBROADCAST, WNDCLASSW,
+    GetWindowLongPtrW, MSG, PBT_APMRESUMEAUTOMATIC, PBT_APMSUSPEND, RegisterClassW,
+    SetWindowLongPtrW, WINDOW_EX_STYLE, WM_ENDSESSION, WM_NCCREATE, WM_POWERBROADCAST, WNDCLASSW,
 };
 use windows::core::PCWSTR;
 
 const CLASS_NAME: PCWSTR = windows::core::w!("SK6812LightbarAgent");
+
+const ESPRESSIF_VID: u16 = 0x303A;
+
+const CONTROLLER_GREETING: &str = "ESP32-SK6812-LIGHTBAR-V1";
 
 #[derive(Debug, PartialEq)]
 enum LedbarCommand {
@@ -40,23 +44,18 @@ unsafe extern "system" fn wnd_proc(
         } else if msg == WM_POWERBROADCAST {
             let tx_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const Sender<LedbarCommand>;
             if !tx_ptr.is_null() {
-                match wparam.0 as u32 {
-                    PBT_APMSUSPEND => {
-                        (&*tx_ptr).send(LedbarCommand::Sleep).unwrap();
-                    }
-                    PBT_APMRESUMEAUTOMATIC => {
-                        (&*tx_ptr).send(LedbarCommand::Wake).unwrap();
-                    }
-                    _ => {}
+                let event = wparam.0 as u32;
+                if event == PBT_APMSUSPEND {
+                    (&*tx_ptr).send(LedbarCommand::Sleep).unwrap();
+                } else if event == PBT_APMRESUMEAUTOMATIC {
+                    (&*tx_ptr).send(LedbarCommand::Wake).unwrap();
                 }
             }
             LRESULT(1)
         } else if msg == WM_ENDSESSION {
             let tx_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const Sender<LedbarCommand>;
-            if !tx_ptr.is_null() {
-                if wparam.0 != 0 {
-                    (&*tx_ptr).send(LedbarCommand::ShutDown).unwrap();
-                }
+            if !tx_ptr.is_null() && wparam.0 != 0 {
+                (&*tx_ptr).send(LedbarCommand::ShutDown).unwrap();
             }
             LRESULT(0)
         } else {
@@ -98,7 +97,7 @@ fn main() -> windows::core::Result<()> {
             Some(tx_ptr.cast()),
         );
 
-        if (hwnd?.is_invalid()) {
+        if hwnd?.is_invalid() {
             panic!("CreateWindowExW failed.");
         }
     }
@@ -120,11 +119,11 @@ fn main() -> windows::core::Result<()> {
                         last_sleep = Instant::now();
                     }
                     if let Err(e) = write_if_possible(con, command) {
-                        println!("Cannot write command! {}", e);
+                        eprintln!("Cannot write command! {}", e);
                     }
                 }
                 Err(ref err) => {
-                    println!("Cannot open port! {}", err.clone());
+                    eprintln!("Cannot open port! {}", err.clone());
                 }
             }
         }
@@ -158,9 +157,66 @@ fn retry_if_closed(port: Result<Box<dyn SerialPort>, Error>) -> Result<Box<dyn S
 }
 
 fn try_connect_to_com() -> Result<Box<dyn SerialPort>, Error> {
-    serialport::new("COM3", 115_200)
-        .timeout(Duration::from_millis(500))
-        .open()
+    let esp32_port = serialport::available_ports()?
+        .into_iter()
+        .filter(|port| {
+            matches!(&port.port_type, serialport::SerialPortType::UsbPort(info)
+                if info.vid == ESPRESSIF_VID
+            )
+        })
+        .find_map(|port| {
+            let con = serialport::new(port.port_name.clone(), 115_200)
+                .timeout(Duration::from_millis(500))
+                .open();
+
+            if let Ok(con) = con {
+                let result = read_greeting_and_detect_controller(&port, con);
+                Some((port, result))
+            } else {
+                None
+            }
+        });
+
+    if let Some((port, con)) = esp32_port {
+        println!("Connected to esp32: {}", port.port_name);
+        Ok(con?)
+    } else {
+        Err(std::io::Error::other("Cannot find usable USB device").into())
+    }
+}
+
+fn read_greeting_and_detect_controller(
+    port: &SerialPortInfo,
+    mut con: Box<dyn SerialPort>,
+) -> Result<Box<dyn SerialPort>, std::io::Error> {
+    con.write_all(b"H\n")?;
+    let mut response = String::new();
+    let mut buffer = [0u8; 64];
+    loop {
+        match con.read(&mut buffer) {
+            Ok(n) => {
+                response.push_str(&String::from_utf8_lossy(&buffer[..n]));
+
+                if response.trim() == CONTROLLER_GREETING {
+                    return Ok(con);
+                }
+                if response.len() > CONTROLLER_GREETING.len() {
+                    eprintln!(
+                        "Incorrect greeting from device {}: {}",
+                        port.port_name, response
+                    );
+                    return Err(std::io::Error::other(format!(
+                        "USB device is not a compatible LED controller: {}",
+                        port.port_name
+                    )));
+                }
+            }
+            Err(e) => {
+                eprintln!("Error reading from serial port: {}", e);
+                return Err(e);
+            }
+        }
+    }
 }
 
 fn write_if_possible(con: &mut Box<dyn SerialPort>, command: LedbarCommand) -> Result<(), Error> {

@@ -81,6 +81,8 @@ void process_command(int command) {
     targetState = LedState::SLEEP;
   } else if (command == 'Z') {
     targetState = LedState::OFF;
+  } else if (command == 'H') {
+    Serial.println("ESP32-SK6812-LIGHTBAR-V1");
   }
 }
 
