@@ -1,5 +1,5 @@
 [package]
-name = "sk6812_windows_agent"
+name = "esp32_sk6812_lightbar_agent"
 version = "0.1.0"
 edition = "2024"
 
