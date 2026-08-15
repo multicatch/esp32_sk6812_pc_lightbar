@@ -4,11 +4,20 @@
 #define LED_COUNT 27
 #define LED_PIN 4
 
+// time after the ESP32 will turn off the LED if the connection is lost
 #define AUTO_OFF_TIME 30000
+// time to wait for agent to connect (after Windows startup)
 #define WAIT_FOR_CONNECTION_TIME 60000
 
+// minimum light level of sleep animation
 #define SLEEP_MIN_LEVEL 0
-#define SLEEP_MAX_LEVEL 8
+// maximum light level of sleep animation
+#define SLEEP_MAX_LEVEL 6
+
+// sleep animation will make a pause between a sequence of "breaths", this is the duration of this pause
+#define SLEEP_BREATH_INTERVAL 20000
+// sleep animation will make a few "breaths" and make a pause, this is the number of said "breaths"
+#define SLEEP_BREATH_COUNT 3
 
 SK6812 LED(LED_COUNT);
 
@@ -115,9 +124,19 @@ void nextFrame() {
   }
 }
 
+int sleepBreathCounter = 3;
+int lastSleepBreathTime = 0;
+
 void nextSleepBreathingFrame(int frameCount) {
   const int minLevel = SLEEP_MIN_LEVEL;
   const int maxLevel = SLEEP_MAX_LEVEL;
+
+  if (sleepBreathCounter == 0 && (millis() - lastSleepBreathTime) < SLEEP_BREATH_INTERVAL) {
+    return;
+  }
+  if (sleepBreathCounter <= 0) {
+    sleepBreathCounter = SLEEP_BREATH_COUNT;
+  }
 
   if (breatheDown) {
     if ((frameCount % 4) != 0) return; // breathe down is slower
@@ -127,6 +146,8 @@ void nextSleepBreathingFrame(int frameCount) {
     }
     breatheDownTo(minLevel);
     if (!breatheDown) {
+      lastSleepBreathTime = millis();
+      sleepBreathCounter -= 1;
       delay(500);
     }
   } else {
