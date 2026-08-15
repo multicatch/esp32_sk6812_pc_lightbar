@@ -11,8 +11,14 @@ The project assumes your USB port powers the ESP32 even if your PC is shut down.
 
 ## Pictures of my implementation
 
+#### Turning off the computer
 ![Working example](./pic/lightbar.gif)
 
+#### Sleep mode animation
+![Sleep mode light](./pic/sleepmac.gif)
+
+#### LED Strip (5V SK6812 with cold white)
 ![SK6812 LED strip](./pic/sk6812.jpeg)
 
+#### ESP32 installed inside (connected to internal USB header)
 ![ESP32-C3](./pic/esp32inside.jpeg)
