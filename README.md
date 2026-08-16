@@ -22,3 +22,9 @@ The project assumes your USB port powers the ESP32 even if your PC is shut down.
 
 #### ESP32 installed inside (connected to internal USB header)
 ![ESP32-C3](./pic/esp32inside.jpeg)
+
+#### LED Light Profile
+
+Not my photo, it’s a picture found on the internet. I bought mine in Obi and cut 19cm to fit it inside my PC case (the Mac Pro case). It blends the LEDs really nicely
+
+![LED light channel](./pic/ledchannel.jpg)
