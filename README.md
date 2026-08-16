@@ -18,6 +18,9 @@ The project assumes you have ports USB powered even if the PC is turned off (thu
 ![Sleep mode light](./pic/sleepmac.gif)
 
 #### LED Strip (5V SK6812 with cold white)
+
+Each "pixel" of this LED Strip is individually addressable. I used a 5V variant with 144 LEDs/1m. I’ve cut a ~19cm section (27 LEDs). Unfortunately it was still not smooth enough for a seamless "breathing" animation, but I implemented temporal dithering and now it looks nice and premium.
+
 ![SK6812 LED strip](./pic/sk6812.jpeg)
 
 #### ESP32 installed inside (connected to internal USB header)
