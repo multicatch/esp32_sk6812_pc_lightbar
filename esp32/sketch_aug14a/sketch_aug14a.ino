@@ -6,18 +6,21 @@
 // PIN of data line of SK6812
 #define LED_PIN 4
 
+// quiet period after turning off (time when the PC connection will be ignored after transitioning to "OFF" state)
+#define TURN_OFF_QUIET_PERIOD 30000
 // time after the ESP32 will turn off the LED if the connection is lost
 #define AUTO_OFF_TIME 20000
 // time to wait for agent to connect (after Windows startup)
 #define WAIT_FOR_CONNECTION_TIME 90000
-// quiet period after turning off (time when the PC connection will be ignored after transitioning to "OFF" state)
-#define TURN_OFF_QUIET_PERIOD 30000
+// timeout of USB connection; sometimes Windows stop talking to the USB and resume polling after a delay, this timeout defines how long to wait for next polling 
+#define USB_TIMEOUT 10000
+// turn off LEDs if agent on PC didn't connect (if true, then ESP32 will wait the above time and turn off; if false, the LEDs will "breathe" as long as the PC is connected)
+const bool turnOffAfterFailedAgentConnection = true;
 
 // minimum light level of sleep animation (breathing)
 #define SLEEP_MIN_LEVEL 0
 // maximum light level of sleep animation (breathing)
 #define SLEEP_MAX_LEVEL 6
-
 
 // sleep animation will make a pause between a sequence of "breaths", this is the duration of this pause
 #define SLEEP_BREATH_INTERVAL 20000
@@ -29,7 +32,7 @@
 // maximum light level during connection pending breathing
 #define PENDING_MAX_LEVEL 7
 
-// brightness curve - how the light "blends" (higher number = wider)
+// brightness curve - how the light "blends" (higher number = wider light, lower number = narrow light); CANNOT BE 0.0f OR LESS
 const float lightLevelCurve = 1.2f;
 
 //// LED setup
@@ -51,6 +54,8 @@ bool duringAnimation = false;
 
 //// LED STATE
 int lastCommunicationTime = 0;
+int lastSerialConnectionTime = 0;
+bool connectionAttemptFailed = false;
 
 typedef enum LedState {
   OFF,
@@ -74,26 +79,46 @@ void setup() {
 }
 
 void loop() {
+  bool commandReceived = false;
   if (Serial.available()) {
     int command = Serial.read();
     if (command != -1 && command != '\n') {
+      connectionAttemptFailed = false;
+      commandReceived = true;
       process_command(command);
     }
-  } else {
+  }
+
+  if (!commandReceived) { // no command received, assuming dead connection
     if (currentState == LedState::WAKE && (elapsedSinceCommand() > AUTO_OFF_TIME)) {
       setState(LedState::OFF);
     }
-    if (currentState == LedState::PENDING_CON && (elapsedSinceCommand() > WAIT_FOR_CONNECTION_TIME)) {
+    if (currentState == LedState::PENDING_CON && (elapsedSinceCommand() > WAIT_FOR_CONNECTION_TIME) && turnOffAfterFailedAgentConnection) {
+      connectionAttemptFailed = true;
       setState(LedState::OFF);
     }
   }
 
   bool pcConnected = usb_serial_jtag_is_connected();
-  if (pcConnected && elapsedSinceCommand() > TURN_OFF_QUIET_PERIOD && currentState == LedState::OFF && targetState == LedState::OFF) {
-    setState(LedState::PENDING_CON);
+  bool turnOffQuietPeriodEnded = elapsedSinceCommand() > TURN_OFF_QUIET_PERIOD;
+  bool lightsTurnedOff = currentState == LedState::OFF && targetState == LedState::OFF;
+
+  if (pcConnected) {
+    lastSerialConnectionTime = millis();
   }
 
-  if ((millis() - lastFrameTime) >= 10) {
+  if (!connectionAttemptFailed && pcConnected && turnOffQuietPeriodEnded && lightsTurnedOff) {
+    // we connected to the USB data (probably Windows started USB polling), thus the PC is ON
+    setState(LedState::PENDING_CON);
+  } else if (!pcConnected && currentState == LedState::PENDING_CON && (millis() - lastSerialConnectionTime > USB_TIMEOUT)) {
+    // we sensed USB connection (PENDING_CON) and then lost it (assuming the PC is turned off)
+    if (turnOffAfterFailedAgentConnection) {
+      connectionAttemptFailed = true;
+    }
+    setState(LedState::OFF);
+  }
+
+  if ((millis() - lastFrameTime) >= 10) { // we need to calculate frames every 10ms or more because we are dithering LEDs in between them
     nextFrame();
     lastFrameTime = millis();
   }
@@ -138,6 +163,7 @@ void nextFrame() {
   frameCount += 1;
   if (currentState != targetState) {
     breatheDownTo(0);
+    resetAnimationCounters(); // reset counters for sleep/pending animation
     return;
   }
 
@@ -160,8 +186,13 @@ void nextFrame() {
   }
 }
 
-int sleepBreathCounter = 3;
+int sleepBreathCounter = 0;
 int lastSleepBreathTime = 0;
+
+void resetAnimationCounters() {
+  sleepBreathCounter = 0;
+  lastSleepBreathTime = 0;
+}
 
 void nextSleepBreathingFrame(int frameCount, const int minLevel, const int maxLevel, const int maxBreathCount, const int breathInterval) {
   int elapsedSinceLastBreath = millis() - lastSleepBreathTime;
