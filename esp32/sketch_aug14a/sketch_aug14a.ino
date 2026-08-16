@@ -155,7 +155,7 @@ void nextFrame() {
       break;
 
     case LedState::PENDING_CON:
-      nextSleepBreathingFrame(frameCount, SLEEP_MIN_LEVEL, SLEEP_MAX_LEVEL, 1, 0);
+      nextSleepBreathingFrame(frameCount, PENDING_MIN_LEVEL, PENDING_MAX_LEVEL, 1, 0);
       break;
   }
 }
