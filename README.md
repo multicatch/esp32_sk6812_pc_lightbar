@@ -2,7 +2,7 @@
 
 This project contains the source code for an ESP32-C3 controller and a Windows background agent/controller (that sends "sleep"/"resume"/"shut down" events to the ESP32).
 
-The project assumes your USB port powers the ESP32 even if your PC is shut down.
+The project assumes you have ports USB powered even if the PC is turned off (thus, the ESP32 firmware expects it will be powered 24/7). But it should work even if the PC cuts power to the ESP32 when turned off.
 
 ## Subprojects
 
