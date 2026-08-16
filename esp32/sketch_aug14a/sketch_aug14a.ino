@@ -1,40 +1,60 @@
 #include <SK6812.h>
 #include "driver/usb_serial_jtag.h"
 
+// how many LEDs you have on your strip
 #define LED_COUNT 27
+// PIN of data line of SK6812
 #define LED_PIN 4
 
 // time after the ESP32 will turn off the LED if the connection is lost
-#define AUTO_OFF_TIME 30000
+#define AUTO_OFF_TIME 20000
 // time to wait for agent to connect (after Windows startup)
-#define WAIT_FOR_CONNECTION_TIME 60000
+#define WAIT_FOR_CONNECTION_TIME 90000
+// quiet period after turning off (time when the PC connection will be ignored after transitioning to "OFF" state)
+#define TURN_OFF_QUIET_PERIOD 30000
 
-// minimum light level of sleep animation
+// minimum light level of sleep animation (breathing)
 #define SLEEP_MIN_LEVEL 0
-// maximum light level of sleep animation
+// maximum light level of sleep animation (breathing)
 #define SLEEP_MAX_LEVEL 6
+
 
 // sleep animation will make a pause between a sequence of "breaths", this is the duration of this pause
 #define SLEEP_BREATH_INTERVAL 20000
 // sleep animation will make a few "breaths" and make a pause, this is the number of said "breaths"
 #define SLEEP_BREATH_COUNT 3
 
-SK6812 LED(LED_COUNT);
+// minimum light level during connection pending breathing
+#define PENDING_MIN_LEVEL 3
+// maximum light level during connection pending breathing
+#define PENDING_MAX_LEVEL 7
 
+// brightness curve - how the light "blends" (higher number = wider)
 const float lightLevelCurve = 1.2f;
 
-int currentLevel = 0;
-int sublevel = 0;
+//// LED setup
+SK6812 LED(LED_COUNT);
+
+typedef struct LightLevel {
+  uint8_t level;
+  uint8_t sublevel;
+} LightLevel_t;
+
+LightLevel_t currentLevel = { 0, 0 };
+
+//// ANIMATION 
 int lastFrameTime = 0;
 int frameCount = 0;
 
 bool breatheDown = false;
 bool duringAnimation = false;
 
-int lastComm = 0;
+//// LED STATE
+int lastCommunicationTime = 0;
 
 typedef enum LedState {
   OFF,
+  PENDING_CON,
   SLEEP,
   WAKE,
 } LedState_t;
@@ -42,32 +62,35 @@ typedef enum LedState {
 LedState_t currentState = LedState::OFF;
 LedState_t targetState = LedState::OFF;
 
+
+//// MAIN PROGRAM
 void setup() {
   Serial.begin(115200);
   LED.set_output(LED_PIN); 
   
   turnOff(); // clear
   
-  lastComm = millis();
+  lastCommunicationTime = millis();
 }
 
 void loop() {
   if (Serial.available()) {
     int command = Serial.read();
     if (command != -1 && command != '\n') {
-      lastComm = millis();
       process_command(command);
     }
   } else {
     if (currentState == LedState::WAKE && (elapsedSinceCommand() > AUTO_OFF_TIME)) {
-      targetState = LedState::OFF;
+      setState(LedState::OFF);
+    }
+    if (currentState == LedState::PENDING_CON && (elapsedSinceCommand() > WAIT_FOR_CONNECTION_TIME)) {
+      setState(LedState::OFF);
     }
   }
 
   bool pcConnected = usb_serial_jtag_is_connected();
-  if (pcConnected && elapsedSinceCommand() > WAIT_FOR_CONNECTION_TIME && currentState == LedState::OFF && targetState == LedState::OFF) {
-    targetState = LedState::SLEEP;
-    lastComm = millis();
+  if (pcConnected && elapsedSinceCommand() > TURN_OFF_QUIET_PERIOD && currentState == LedState::OFF && targetState == LedState::OFF) {
+    setState(LedState::PENDING_CON);
   }
 
   if ((millis() - lastFrameTime) >= 10) {
@@ -80,23 +103,32 @@ void loop() {
     currentState = targetState;
   }
 
-  renderWhiteGlow(currentLevel, sublevel);
+  renderWhiteGlow(currentLevel);
+}
+
+
+//// UTILS
+
+void setState(LedState_t state) {
+  targetState = state;
+  lastCommunicationTime = millis();
 }
 
 void process_command(int command) {
   if (command == 'W') {
-    targetState = LedState::WAKE;
+    setState(LedState::WAKE);
   } else if (command == 'S') {
-    targetState = LedState::SLEEP;
+    setState(LedState::SLEEP);
   } else if (command == 'Z') {
-    targetState = LedState::OFF;
+    setState(LedState::OFF);
   } else if (command == 'H') {
     Serial.println("ESP32-SK6812-LIGHTBAR-V1");
+    setState(LedState::WAKE);
   }
 }
 
 int elapsedSinceCommand() {
-  return millis() - lastComm;
+  return millis() - lastCommunicationTime;
 }
 
 void nextFrame() {
@@ -119,7 +151,11 @@ void nextFrame() {
       break;
 
     case LedState::SLEEP:
-      nextSleepBreathingFrame(frameCount);
+      nextSleepBreathingFrame(frameCount, SLEEP_MIN_LEVEL, SLEEP_MAX_LEVEL, SLEEP_BREATH_COUNT, SLEEP_BREATH_INTERVAL);
+      break;
+
+    case LedState::PENDING_CON:
+      nextSleepBreathingFrame(frameCount, SLEEP_MIN_LEVEL, SLEEP_MAX_LEVEL, 1, 0);
       break;
   }
 }
@@ -127,22 +163,22 @@ void nextFrame() {
 int sleepBreathCounter = 3;
 int lastSleepBreathTime = 0;
 
-void nextSleepBreathingFrame(int frameCount) {
-  const int minLevel = SLEEP_MIN_LEVEL;
-  const int maxLevel = SLEEP_MAX_LEVEL;
+void nextSleepBreathingFrame(int frameCount, const int minLevel, const int maxLevel, const int maxBreathCount, const int breathInterval) {
+  int elapsedSinceLastBreath = millis() - lastSleepBreathTime;
 
-  if (sleepBreathCounter == 0 && (millis() - lastSleepBreathTime) < SLEEP_BREATH_INTERVAL) {
+  if (sleepBreathCounter == 0 && elapsedSinceLastBreath < breathInterval) {
     return;
   }
-  if (sleepBreathCounter <= 0) {
-    sleepBreathCounter = SLEEP_BREATH_COUNT;
+  bool counterNeedsRestartDueToInactivity = !breatheDown && elapsedSinceLastBreath >= breathInterval;
+  if (sleepBreathCounter <= 0 || counterNeedsRestartDueToInactivity) {
+    sleepBreathCounter = maxBreathCount;
   }
 
   if (breatheDown) {
     if ((frameCount % 4) != 0) return; // breathe down is slower
-    if (currentLevel == maxLevel) {
+    if (currentLevel.level == maxLevel) {
       delay(200);
-      sublevel = 0;
+      currentLevel.sublevel = 0;
     }
     breatheDownTo(minLevel);
     if (!breatheDown) {
@@ -153,14 +189,14 @@ void nextSleepBreathingFrame(int frameCount) {
   } else {
     if ((frameCount % 3) != 0) return; // slow down the animation 
     breatheUpTo(9);
-    if (currentLevel >= maxLevel) {
+    if (currentLevel.level >= maxLevel) {
       breatheDown = true;
     }
   }
 }
 
 void breatheDownTo(uint8_t target) {
-  if (target >= currentLevel && sublevel == 0) {
+  if (target >= currentLevel.level && currentLevel.sublevel == 0) {
     duringAnimation = false;
     breatheDown = false;
     return;
@@ -172,7 +208,7 @@ void breatheDownTo(uint8_t target) {
 }
 
 void breatheUpTo(uint8_t target) {
-  if (target <= currentLevel) {
+  if (target <= currentLevel.level) {
     duringAnimation = false;
     breatheDown = false;
     return;
@@ -191,43 +227,43 @@ void turnOff() {
 }
 
 void whiteDown() {
-  if (currentLevel <= 0 && sublevel <= 0) {
-    currentLevel = 0;
-    sublevel = 0;
+  if (currentLevel.level <= 0 && currentLevel.sublevel <= 0) {
+    currentLevel.level = 0;
+    currentLevel.sublevel = 0;
     return;
   }
-  if (sublevel <= 0) {
-    currentLevel -= 1;
-    sublevel = 9;
+  if (currentLevel.sublevel <= 0) {
+    currentLevel.level -= 1;
+    currentLevel.sublevel = 9;
   } else {
-    sublevel -= 1;
+    currentLevel.sublevel -= 1;
   }
 }
 
 void whiteUp() {
-  if (currentLevel >= 255) {
-    sublevel = 0;
-    currentLevel = 255;
+  if (currentLevel.level >= 255) {
+    currentLevel.sublevel = 0;
+    currentLevel.level = 255;
     return;
   }
-  sublevel += 1;
-  if (sublevel >= 10) {
-    currentLevel += 1;
-    sublevel = 0;
+  currentLevel.sublevel += 1;
+  if (currentLevel.sublevel >= 10) {
+    currentLevel.level += 1;
+    currentLevel.sublevel = 0;
   }
 }
 
-void renderWhiteGlow(uint8_t targetLevel, uint8_t sublevel) {
-  if (targetLevel == 255) {
-    setWhiteGlowLevel(targetLevel);
+void renderWhiteGlow(LightLevel_t targetLevel) {
+  if (targetLevel.level == 255) {
+    setWhiteGlowLevel(targetLevel.level);
     return;
   }
   // dithering
-  uint8_t normalizedSub = min((uint8_t)10, sublevel);
-  if (sublevel == 0 || (millis() % 10) > normalizedSub) {
-    setWhiteGlowLevel(targetLevel);
+  uint8_t normalizedSub = min((uint8_t)10, targetLevel.sublevel);
+  if (targetLevel.sublevel == 0 || (millis() % 10) > normalizedSub) {
+    setWhiteGlowLevel(targetLevel.level);
   } else {
-    setWhiteGlowLevel(targetLevel + 1);
+    setWhiteGlowLevel(targetLevel.level + 1);
   }
 }
 
