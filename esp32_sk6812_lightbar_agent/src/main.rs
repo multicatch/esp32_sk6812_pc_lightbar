@@ -1,9 +1,10 @@
 #![windows_subsystem = "windows"]
 
+use crate::LedbarCommand::{ShutDown, Sleep, Wake};
 use serialport::{Error, SerialPort, SerialPortInfo};
-use std::io::{ErrorKind, Read, Write};
+use std::io::{Read, Write};
 use std::sync::mpsc;
-use std::sync::mpsc::Sender;
+use std::sync::mpsc::{Receiver, Sender};
 use std::thread;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
@@ -22,11 +23,71 @@ const ESPRESSIF_VID: u16 = 0x303A;
 
 const CONTROLLER_GREETING: &str = "ESP32-SK6812-LIGHTBAR-V1";
 
-#[derive(Debug, PartialEq)]
+const STALE_MESSAGE_TIME: Duration = Duration::from_secs(5);
+const SLEEP_CMD_QUIET_TIME: Duration = Duration::from_secs(10);
+
+#[derive(Debug, Clone)]
+struct LedbarCommandMessage(Instant, LedbarCommand);
+
+impl LedbarCommandMessage {
+    pub fn new(cmd: LedbarCommand) -> Self {
+        LedbarCommandMessage(Instant::now(), cmd)
+    }
+}
+
+#[derive(Debug, PartialEq, Clone)]
 enum LedbarCommand {
     Wake,
     Sleep,
     ShutDown,
+}
+
+pub struct Broadcast<T: Clone> {
+    tx: Receiver<T>,
+    subscribers: Vec<Sender<T>>,
+}
+
+impl<T: Clone> Broadcast<T> {
+    pub fn new() -> (Sender<T>, Broadcast<T>) {
+        let (tx, rx) = mpsc::channel();
+        (
+            tx,
+            Broadcast {
+                tx: rx,
+                subscribers: Vec::new(),
+            },
+        )
+    }
+
+    pub fn create_subscriber(&mut self) -> Receiver<T> {
+        let (tx, rx) = mpsc::channel();
+        self.subscribers.push(tx);
+        rx
+    }
+
+    pub fn run_broadcast(&mut self) {
+        loop {
+            match self.tx.recv() {
+                Ok(data) => {
+                    let mut i = 0;
+                    while i < self.subscribers.len() {
+                        let result = self.subscribers[i].send(data.clone());
+                        if result.is_err() {
+                            // this channel was closed
+                            self.subscribers.remove(i);
+                        } else {
+                            i += 1;
+                        }
+                    }
+                }
+                Err(_) => {
+                    // channel disconnected, we propagate it to the subscribers
+                    self.subscribers.clear();
+                    return;
+                }
+            }
+        }
+    }
 }
 
 unsafe extern "system" fn wnd_proc(
@@ -38,24 +99,24 @@ unsafe extern "system" fn wnd_proc(
     unsafe {
         if msg == WM_NCCREATE {
             let create_struct = &*(lparam.0 as *const CREATESTRUCTW);
-            let tx_ptr = create_struct.lpCreateParams as *mut Sender<LedbarCommand>;
+            let tx_ptr = create_struct.lpCreateParams as *mut Sender<LedbarCommandMessage>;
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, tx_ptr as isize);
             LRESULT(1)
         } else if msg == WM_POWERBROADCAST {
-            let tx_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const Sender<LedbarCommand>;
+            let tx_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const Sender<LedbarCommandMessage>;
             if !tx_ptr.is_null() {
                 let event = wparam.0 as u32;
                 if event == PBT_APMSUSPEND {
-                    (&*tx_ptr).send(LedbarCommand::Sleep).unwrap();
+                    (&*tx_ptr).send(LedbarCommandMessage::new(Sleep)).unwrap();
                 } else if event == PBT_APMRESUMEAUTOMATIC {
-                    (&*tx_ptr).send(LedbarCommand::Wake).unwrap();
+                    (&*tx_ptr).send(LedbarCommandMessage::new(Wake)).unwrap();
                 }
             }
             LRESULT(1)
         } else if msg == WM_ENDSESSION {
-            let tx_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const Sender<LedbarCommand>;
+            let tx_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const Sender<LedbarCommandMessage>;
             if !tx_ptr.is_null() && wparam.0 != 0 {
-                (&*tx_ptr).send(LedbarCommand::ShutDown).unwrap();
+                (&*tx_ptr).send(LedbarCommandMessage::new(ShutDown)).unwrap();
             }
             LRESULT(0)
         } else {
@@ -65,8 +126,74 @@ unsafe extern "system" fn wnd_proc(
 }
 
 fn main() -> windows::core::Result<()> {
-    let (tx, rx) = mpsc::channel::<LedbarCommand>();
+    let (tx, mut broadcast) = Broadcast::<LedbarCommandMessage>::new();
+    let esp32_rx = broadcast.create_subscriber();
+    let ping_rx = broadcast.create_subscriber();
 
+    thread::spawn(move || {
+        broadcast.run_broadcast();
+    });
+
+    create_hidden_window(&tx)?;
+
+    thread::spawn(move || {
+        let mut port = try_connect_to_com();
+        let mut last_sleep = Instant::now();
+
+        while let Ok(LedbarCommandMessage(time, command)) = esp32_rx.recv() {
+            if time.elapsed() > STALE_MESSAGE_TIME {
+                // stale message
+                continue;
+            }
+            if command == Wake && last_sleep.elapsed() < SLEEP_CMD_QUIET_TIME {
+                continue; // some background tasks may wake us up too early
+            }
+
+            println!("Received command {:?}", command);
+            port = retry_if_closed(port);
+            match port {
+                Ok(ref mut con) => {
+                    if command == Sleep {
+                        last_sleep = Instant::now();
+                    }
+                    if let Err(e) = write_if_possible(con, command) {
+                        eprintln!("Cannot write command! {}", e);
+                    }
+                }
+                Err(ref err) => {
+                    eprintln!("Cannot open port! {}", err.clone());
+                }
+            }
+        }
+    });
+
+    tx.send(LedbarCommandMessage::new(Wake)).unwrap(); // first heartbeat
+
+    thread::spawn(move || {
+        loop {
+            sleep(Duration::from_secs(2));
+            if let Ok(LedbarCommandMessage(time, cmd)) = ping_rx.try_recv()
+                && cmd != Wake
+                && time.elapsed() <= STALE_MESSAGE_TIME
+            {
+                // slow down, we're either going to sleep or user is trying to shut down the PC
+                sleep(SLEEP_CMD_QUIET_TIME);
+            }
+            tx.send(LedbarCommandMessage::new(Wake)).unwrap();
+        }
+    });
+
+    unsafe {
+        let mut msg = MSG::default();
+        while GetMessageW(&mut msg, None, 0, 0).as_bool() {
+            DispatchMessageW(&msg);
+        }
+    }
+
+    Ok(())
+}
+
+fn create_hidden_window(tx: &Sender<LedbarCommandMessage>) -> windows::core::Result<()> {
     let tx_box = Box::new(tx.clone());
     let tx_ptr = Box::into_raw(tx_box);
 
@@ -100,51 +227,7 @@ fn main() -> windows::core::Result<()> {
         if hwnd?.is_invalid() {
             panic!("CreateWindowExW failed.");
         }
-    }
-
-    thread::spawn(move || {
-        let mut port = try_connect_to_com();
-        let mut last_sleep = Instant::now();
-
-        while let Ok(command) = rx.recv() {
-            if command == LedbarCommand::Wake && last_sleep.elapsed() < Duration::from_secs(10) {
-                continue; // some background tasks may wake us up too early
-            }
-
-            println!("Received command {:?}", command);
-            port = retry_if_closed(port);
-            match port {
-                Ok(ref mut con) => {
-                    if command == LedbarCommand::Sleep {
-                        last_sleep = Instant::now();
-                    }
-                    if let Err(e) = write_if_possible(con, command) {
-                        eprintln!("Cannot write command! {}", e);
-                    }
-                }
-                Err(ref err) => {
-                    eprintln!("Cannot open port! {}", err.clone());
-                }
-            }
-        }
-    });
-
-    tx.send(LedbarCommand::Wake).unwrap(); // first heartbeat
-
-    thread::spawn(move || {
-        loop {
-            sleep(Duration::from_secs(2));
-            tx.send(LedbarCommand::Wake).unwrap();
-        }
-    });
-
-    unsafe {
-        let mut msg = MSG::default();
-        while GetMessageW(&mut msg, None, 0, 0).as_bool() {
-            DispatchMessageW(&msg);
-        }
-    }
-
+    };
     Ok(())
 }
 
