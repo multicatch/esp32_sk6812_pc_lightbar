@@ -6,6 +6,7 @@ It listens to Windows events like "sleep", "resume" and "shut down" and then for
 
 ## How to use it?
 
+0. You need Rust (the programming language compiler, not the game) to build this project. Go to [official Rust webpage](https://rust-lang.org/learn/get-started/) and follow the install steps.
 1. Build the project using Rust (`cargo build --release`).
 2. Create a shortcut to `target/release/esp32_sk6812_lightbar_agent.exe`.
 3. Move the shortcut to `%appdata%/Microsoft/Windows/Start Menu/Programs/Startup`.
