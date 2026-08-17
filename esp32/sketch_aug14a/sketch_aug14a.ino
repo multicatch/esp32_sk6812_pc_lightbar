@@ -122,11 +122,11 @@ void loop() {
   if ((millis() - lastFrameTime) >= 10) { // we need to calculate frames every 10ms or more because we are dithering LEDs in between them
     nextFrame();
     lastFrameTime = millis();
-  }
 
-  if (!duringAnimation && targetState != currentState) {
-    Serial.printf("Setting state: %d\n", targetState);
-    currentState = targetState;
+    if (!duringAnimation && targetState != currentState) { // we transition the animation/state only after the frames are rendered
+      Serial.printf("Setting state: %d\n", targetState);
+      currentState = targetState;
+    }
   }
 
   renderWhiteGlow(currentLevel);
@@ -168,6 +168,11 @@ void nextFrame() {
     return;
   }
 
+  if (shouldHoldAnimation()) {
+    // an animation delay was scheduled, so we delay it
+    return;
+  }
+
   switch (currentState) {
     case LedState::OFF:
       breatheDownTo(0);
@@ -187,42 +192,60 @@ void nextFrame() {
   }
 }
 
+int scheduledDelayEnd = 0;
 int sleepBreathCounter = 0;
 int lastSleepBreathTime = 0;
 
 void resetAnimationCounters() {
   sleepBreathCounter = 0;
   lastSleepBreathTime = 0;
+  scheduledDelayEnd = 0;
 }
 
+// returns false if a non-blocking delay was scheduled
+bool shouldHoldAnimation() {
+  return scheduledDelayEnd > millis();
+}
+
+// non-blocking delay
+void delayAnimation(uint32_t delayMillis) {
+  scheduledDelayEnd = millis() + delayMillis;
+}
+
+// calculate next frame for "breathing" animation, which is a slow fade up (up to maxLevel) and down (down to minLevel)
 void nextSleepBreathingFrame(int frameCount, const int minLevel, const int maxLevel, const int maxBreathCount, const int breathInterval) {
   int elapsedSinceLastBreath = millis() - lastSleepBreathTime;
+
+  if (minLevel >= maxLevel) {
+    if (currentLevel.level < minLevel) {
+      breatheUpTo(minLevel);
+    } else {
+      breatheDownTo(minLevel);
+    }
+    return;
+  }
 
   if (sleepBreathCounter == 0 && elapsedSinceLastBreath < breathInterval) {
     return;
   }
-  bool counterNeedsRestartDueToInactivity = !breatheDown && elapsedSinceLastBreath >= breathInterval;
-  if (sleepBreathCounter <= 0 || counterNeedsRestartDueToInactivity) {
+  if (sleepBreathCounter <= 0) {
     sleepBreathCounter = maxBreathCount;
   }
 
   if (breatheDown) {
     if ((frameCount % 3) != 0) return; // breathe down is slower
-    if (currentLevel.level == maxLevel) {
-      delay(200);
-      currentLevel.sublevel = 0;
-    }
     breatheDownTo(minLevel);
     if (!breatheDown) {
       lastSleepBreathTime = millis();
       sleepBreathCounter -= 1;
-      delay(500);
+      delayAnimation(500);
     }
   } else {
     if ((frameCount % 3) == 0) return; // slow down the animation 
-    breatheUpTo(9);
+    breatheUpTo(maxLevel);
     if (currentLevel.level >= maxLevel) {
       breatheDown = true;
+      delayAnimation(200);
     }
   }
 }
@@ -234,7 +257,7 @@ void breatheDownTo(uint8_t target) {
     return;
   } else {
     duringAnimation = true;
-    breatheDown = true;
+    breatheDown = true; 
   }
   whiteDown();
 }
