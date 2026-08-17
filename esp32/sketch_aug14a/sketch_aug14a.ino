@@ -76,6 +76,7 @@ void setup() {
   turnOff(); // clear
   
   lastCommunicationTime = millis();
+  setState(LedState::OFF);
 }
 
 void loop() {
@@ -206,7 +207,7 @@ void nextSleepBreathingFrame(int frameCount, const int minLevel, const int maxLe
   }
 
   if (breatheDown) {
-    if ((frameCount % 4) != 0) return; // breathe down is slower
+    if ((frameCount % 3) != 0) return; // breathe down is slower
     if (currentLevel.level == maxLevel) {
       delay(200);
       currentLevel.sublevel = 0;
@@ -218,7 +219,7 @@ void nextSleepBreathingFrame(int frameCount, const int minLevel, const int maxLe
       delay(500);
     }
   } else {
-    if ((frameCount % 3) != 0) return; // slow down the animation 
+    if ((frameCount % 3) == 0) return; // slow down the animation 
     breatheUpTo(9);
     if (currentLevel.level >= maxLevel) {
       breatheDown = true;
@@ -265,7 +266,7 @@ void whiteDown() {
   }
   if (currentLevel.sublevel <= 0) {
     currentLevel.level -= 1;
-    currentLevel.sublevel = 9;
+    currentLevel.sublevel = 15;
   } else {
     currentLevel.sublevel -= 1;
   }
@@ -278,7 +279,7 @@ void whiteUp() {
     return;
   }
   currentLevel.sublevel += 1;
-  if (currentLevel.sublevel >= 10) {
+  if (currentLevel.sublevel >= 16) {
     currentLevel.level += 1;
     currentLevel.sublevel = 0;
   }
@@ -290,8 +291,9 @@ void renderWhiteGlow(LightLevel_t targetLevel) {
     return;
   }
   // dithering
-  uint8_t normalizedSub = min((uint8_t)10, targetLevel.sublevel);
-  if (targetLevel.sublevel == 0 || (millis() % 10) > normalizedSub) {
+  int ditherStep = millis() % 16;
+  uint8_t normalizedSub = min(targetLevel.sublevel, (uint8_t) 16);
+  if (targetLevel.sublevel == 0 || ditherStep >= normalizedSub) {
     setWhiteGlowLevel(targetLevel.level);
   } else {
     setWhiteGlowLevel(targetLevel.level + 1);
