@@ -285,19 +285,23 @@ void whiteUp() {
   }
 }
 
+int ditherStep = 0;
+
 void renderWhiteGlow(LightLevel_t targetLevel) {
   if (targetLevel.level == 255) {
     setWhiteGlowLevel(targetLevel.level);
     return;
   }
-  // dithering
-  int ditherStep = millis() % 16;
-  uint8_t normalizedSub = min(targetLevel.sublevel, (uint8_t) 16);
-  if (targetLevel.sublevel == 0 || ditherStep >= normalizedSub) {
-    setWhiteGlowLevel(targetLevel.level);
-  } else {
-    setWhiteGlowLevel(targetLevel.level + 1);
+  // temporal sigma-delta dithering
+  uint8_t normalizedSub = min(targetLevel.sublevel, (uint8_t) 15);
+  ditherStep += normalizedSub;
+
+  uint8_t adjustedLevel = targetLevel.level;
+  if (ditherStep >= 16) {
+    ditherStep -= 16;
+    adjustedLevel += 1;
   }
+  setWhiteGlowLevel(adjustedLevel);
 }
 
 void setWhiteGlowLevel(uint8_t targetLevel) {
