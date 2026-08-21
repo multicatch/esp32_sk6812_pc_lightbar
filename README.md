@@ -24,7 +24,10 @@ Each "pixel" of this LED Strip is individually addressable. I used a 5V variant 
 ![SK6812 LED strip](./pic/sk6812.jpeg)
 
 #### ESP32 installed inside (connected to internal USB header)
+
 ![ESP32-C3](./pic/esp32inside.jpeg)
+
+I’ve wrapped it in elective tape after taking this picture, I don’t want the pins touching the aluminum case.
 
 #### LED Light Profile
 
