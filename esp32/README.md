@@ -15,7 +15,11 @@ This folder contains source code for ESP32 firmware that will control and play a
 
 I’ve used an SK6812 LED strip with 144LEDs/m. I’ve cut a ~19cm section (27 LEDs). 
 
-The 5V pin is actually connected to the 5V line on USB, so I was able to avoid excessive connections. I connected the ESP32 to a 9-pin USB 2.0 internal header and it powers everything.
+The 5V pin is actually connected to the USB+5V line, so I was able to avoid excessive connections. I connected the ESP32 to a 9-pin USB 2.0 internal header and it powers everything.
+
+If you connect your LED strip to the 5V pin (like I did), then make sure that USB is the only source of power. Don’t connect anything to the 3.3V pin and don’t connect any power to the LEDs.
+
+If USB is too weak to power the whole LED strip, then just disconnect the red (5V) and white (GND). You can probably reuse your 4-pin Molex ATX connector to power your LED strip (red = 5V, 2x black = GND, yellow = 12V) 
 
 ## How to build?
 
