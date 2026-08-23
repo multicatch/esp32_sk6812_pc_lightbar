@@ -22,6 +22,11 @@ const bool turnOffAfterFailedAgentConnection = true;
 // maximum light level of sleep animation (breathing)
 #define SLEEP_MAX_LEVEL 6
 
+// how long to "hold" the breath animation on max light level (ms)
+#define BREATHE_UP_HOLD_TIME 400
+// how long to "hold" the breath animation on min light level (ms)
+#define BREATHE_DOWN_HOLD_TIME 700
+
 // sleep animation will make a pause between a sequence of "breaths", this is the duration of this pause
 #define SLEEP_BREATH_INTERVAL 15000
 // sleep animation will make a few "breaths" and make a pause, this is the number of said "breaths"
@@ -251,19 +256,19 @@ void nextSleepBreathingFrame(int frameCount, const int minLevel, const int maxLe
   }
 
   if (breatheDown) {
-    if ((frameCount % 3) != 0) return; // breathe down is slower
+    if ((frameCount % 3) != 0) return; // breathe down is slower (33.3%)
     breatheDownTo(minLevel);
     if (!breatheDown) {
       lastSleepBreathTime = millis();
       sleepBreathCounter -= 1;
-      delayAnimation(500);
+      delayAnimation(BREATHE_DOWN_HOLD_TIME);
     }
   } else {
-    if ((frameCount % 3) == 0) return; // slow down the animation 
+    if ((frameCount % 2) == 0) return; // slow down the animation (50%)
     breatheUpTo(maxLevel);
     if (currentLevel.level >= maxLevel) {
       breatheDown = true;
-      delayAnimation(200);
+      delayAnimation(BREATHE_UP_HOLD_TIME);
     }
   }
 }
