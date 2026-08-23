@@ -36,7 +36,7 @@ const bool turnOffAfterFailedAgentConnection = true;
 const float lightLevelCurve = 1.2f;
 
 // remove this if you want an unlocked fps (may cause the animation to be unstable/variable speed)
-#define FPS_LOCK 333
+#define FPS_LOCK 300
 
 //// LED setup
 SK6812 LED(LED_COUNT);
