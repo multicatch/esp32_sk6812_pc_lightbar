@@ -4,6 +4,16 @@ This project contains the source code for an ESP32-C3 controller and a Windows b
 
 The project assumes you have ports USB powered even if the PC is turned off (thus, the ESP32 firmware expects it will be powered 24/7). But it should work even if the PC cuts power to the ESP32 when turned off.
 
+## Features
+
+- Nice white glow
+- Smooth animation/transition
+- Turns on with your Windows PC, turns off when you turn off your PC
+- Works with USB power when shut down (and without it)
+- Sleep “breathing” animation (requires USB power when suspended)
+- Animation with dithering and FPS lock for smooth and stable operation
+- Windows app/agent is very lightweight (needs 1MB of RAM and Task Manager shows 0% CPU activity for this agent)
+
 ## Subprojects
 
 * [esp32 - Arduino IDE source code for ESP32-C3](./esp32)
