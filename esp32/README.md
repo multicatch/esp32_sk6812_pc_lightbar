@@ -19,7 +19,7 @@ The 5V pin is actually connected to the USB+5V line, so I was able to avoid exce
 
 If you connect your LED strip to the 5V pin (like I did), then make sure that USB is the only source of power. Don’t connect anything to the 3.3V pin and don’t connect any power to the LEDs.
 
-If USB is too weak to power the whole LED strip, then just disconnect the red (5V) and white (GND). You can probably reuse your 4-pin Molex ATX connector to power your LED strip (red = 5V, 2x black = GND, yellow = 12V) 
+If USB is too weak to power the whole LED strip, then just disconnect the red (5V) and white (GND). You can probably reuse your [4-pin Molex ATX connector](https://en.wikipedia.org/wiki/Molex_connector) to power your LED strip (red = 5V, 2x black = GND, yellow = 12V). You can also choose this solution if you have a 12V LEDs (instead of the 5V variant). 
 
 ## How to build?
 
