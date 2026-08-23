@@ -12,8 +12,8 @@ The project assumes you have ports USB powered even if the PC is turned off (thu
 - Works with USB power when shut down (and without it)
 - Sleep “breathing” animation (requires USB power when suspended)
 - Animation with dithering and FPS lock for smooth and stable operation
-- Windows app/agent is very lightweight (needs 0.7MB-0.9MB of RAM and Task Manager shows 0% CPU activity for this agent all the time)
 - The Windows app/agent autodetects the ESP32 controller (no need to configure anything, just run the app)
+- Windows app/agent is very lightweight (needs 0.7MB-0.9MB of RAM and Task Manager shows 0% CPU activity for this agent all the time)
 
 ![Windows app/agent Task Manager resources](./pic/agenttaskmgr.jpg)
 
@@ -21,7 +21,7 @@ The project assumes you have ports USB powered even if the PC is turned off (thu
 
 You need an ESP32, SK6812 LED strip, soldering skills and Arduino IDE.
 
-Optionally, you need Rust if you want to build the Windows agent (the exe is also available in [rekeases](https://github.com/multicatch/esp32_sk6812_pc_lightbar/releases)).
+Optionally, you need Rust if you want to build the Windows agent (the exe is also available in [releases](https://github.com/multicatch/esp32_sk6812_pc_lightbar/releases)).
 
 The LED agent needs to be added to *Startup* (as per instructions [here](./esp32_sk6812_lightbar_agent)).
 
