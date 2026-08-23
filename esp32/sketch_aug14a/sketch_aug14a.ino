@@ -23,7 +23,7 @@ const bool turnOffAfterFailedAgentConnection = true;
 #define SLEEP_MAX_LEVEL 6
 
 // sleep animation will make a pause between a sequence of "breaths", this is the duration of this pause
-#define SLEEP_BREATH_INTERVAL 20000
+#define SLEEP_BREATH_INTERVAL 15000
 // sleep animation will make a few "breaths" and make a pause, this is the number of said "breaths"
 #define SLEEP_BREATH_COUNT 3
 
@@ -34,6 +34,9 @@ const bool turnOffAfterFailedAgentConnection = true;
 
 // brightness curve - how the light "blends" (higher number = wider light, lower number = narrow light); CANNOT BE 0.0f OR LESS
 const float lightLevelCurve = 1.2f;
+
+// remove this if you want an unlocked fps (may cause the animation to be unstable/variable speed)
+#define FPS_LOCK 333
 
 //// LED setup
 SK6812 LED(LED_COUNT);
@@ -48,6 +51,10 @@ LightLevel_t currentLevel = { 0, 0 };
 //// ANIMATION 
 int lastFrameTime = 0;
 int frameCount = 0;
+#ifdef FPS_LOCK
+uint32_t nextFrameTime = 0;
+constexpr uint32_t targetRenderInterval = 1'000'000 / FPS_LOCK;
+#endif
 
 bool breatheDown = false;
 bool duringAnimation = false;
@@ -128,6 +135,17 @@ void loop() {
       currentState = targetState;
     }
   }
+
+  #ifdef FPS_LOCK
+  uint32_t now = micros();
+  if (now < nextFrameTime) {
+    return;
+  }
+  nextFrameTime += targetRenderInterval;
+  if (nextFrameTime <= now) { // we are lagging behind
+    nextFrameTime = now + targetRenderInterval;
+  }
+  #endif
 
   renderWhiteGlow(currentLevel);
 }
