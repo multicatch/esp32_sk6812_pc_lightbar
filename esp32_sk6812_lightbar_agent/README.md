@@ -6,12 +6,15 @@ It listens to Windows events like "sleep", "resume" and "shut down" and then for
 
 ## How to use it?
 
+### Variant 1: Build from sources
 0. You need Rust (the programming language compiler, not the game) to build this project. Go to [official Rust webpage](https://rust-lang.org/learn/get-started/) and follow the install steps.
 1. Build the project using Rust (`cargo build --release`).
 
-Or: 1. Download the exe from [releases](https://github.com/multicatch/esp32_sk6812_pc_lightbar/releases) - personally I prefer the "build from sources" way, but I understand why you don't want to install Rust for 1 little app.
+### Variant 2: Download prebuild exe
+1. Download the exe from [releases](https://github.com/multicatch/esp32_sk6812_pc_lightbar/releases) - personally I prefer the "build from sources" way, but I understand why you don't want to install Rust for 1 little app.
 
-2. Create a shortcut to `target/release/esp32_sk6812_lightbar_agent.exe`. After running the command from step 1, the compiler will create a folder named `target` and inside a folder named `release`. In this folder you will find the exe file. Right Mouse Button on the exe > Show more options > Create shortcut.
+### Configure the app to run at startup
+2. Create a shortcut to `esp32_sk6812_lightbar_agent.exe`. Right Mouse Button on the exe > Show more options > Create shortcut. If you built it from sources, the compiler will create a folder named `target` and inside a folder named `release`. In this folder you will find the exe file. 
 3. Move the shortcut to `%appdata%/Microsoft/Windows/Start Menu/Programs/Startup` (you can paste this path into the explorer address bar).
 4. Restart your PC.
 
