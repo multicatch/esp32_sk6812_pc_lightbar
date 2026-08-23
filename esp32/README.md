@@ -35,3 +35,7 @@ To build this sketch, you also need to add [AxlRocket/ESP32_SK6812](https://gith
 
 Select `ESP32-C3 DevKit` as your board and **enable USB CDC on Boot**. This option is required for the [Rust agent](../esp32_sk6812_lightbar_agent) to work.
 
+If you have chosen other pin than GPIO 4, then change LED_PIN to an appropriate number.
+
+Similarly, if you have more/less LEDs than 27, change the LED_COUNT. I recommend an odd number of LEDs, because then there is 1 “central” LED (which makes the glow effect look even).
+
