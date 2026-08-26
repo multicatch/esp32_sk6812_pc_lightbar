@@ -1,11 +1,13 @@
 #include <SK6812.h>
 #include "driver/usb_serial_jtag.h"
 
+/////// LED STRIP SETTINGS //////
 // how many LEDs you have on your strip
 #define LED_COUNT 27
 // PIN of data line of SK6812
 #define LED_PIN 4
 
+/////// ESP32 BEHAVIOR //////
 // quiet period after turning off (time when the PC connection will be ignored after transitioning to "OFF" state)
 #define TURN_OFF_QUIET_PERIOD 30000
 // time after the ESP32 will turn off the LED if the connection is lost
@@ -17,32 +19,36 @@
 // turn off LEDs if agent on PC didn't connect (if true, then ESP32 will wait the above time and turn off; if false, the LEDs will "breathe" as long as the PC is connected)
 const bool turnOffAfterFailedAgentConnection = true;
 
+////// SLEEP ANIMATION SEETTINGS //////
 // minimum light level of sleep animation (breathing)
 #define SLEEP_MIN_LEVEL 0
 // maximum light level of sleep animation (breathing)
 #define SLEEP_MAX_LEVEL 6
 
-// how long to "hold" the breath animation on max light level (ms)
-#define BREATHE_UP_HOLD_TIME 400
-// how long to "hold" the breath animation on min light level (ms)
-#define BREATHE_DOWN_HOLD_TIME 700
-
 // sleep animation will make a pause between a sequence of "breaths", this is the duration of this pause
-#define SLEEP_BREATH_INTERVAL 15000
-// sleep animation will make a few "breaths" and make a pause, this is the number of said "breaths"
-#define SLEEP_BREATH_COUNT 3
+#define SLEEP_BREATH_INTERVAL 5000
+// sleep animation will make a few "breaths" and make a pause, this is the number of said "breaths" (for example, if you want a 3 consecutive breaths before a longer pause, set this to 3)
+#define SLEEP_BREATH_COUNT 1
 
+// how long to "hold" the breath animation on max light level (ms)
+#define SLEEP_BREATHE_UP_PAUSE_TIME 700
+// how long to "hold" the breath animation on min light level (ms)
+#define SLEEP_BREATHE_DOWN_PAUSE_TIME 700
+
+////// PENDING CONNECTION ANIMATION SETTINGS ////
 // minimum light level during connection pending breathing
-#define PENDING_MIN_LEVEL 3
+#define PENDING_MIN_LEVEL 5
 // maximum light level during connection pending breathing
 #define PENDING_MAX_LEVEL 7
 
+// how long to "hold" the pending animation on breathe up/down 
+#define PENDING_BREATH_PAUSE_TIME 100
+
+////// GENERAL GLOW SETTINGS //////
 // brightness curve - how the light "blends" (higher number = wider light, lower number = narrow light); CANNOT BE 0.0f OR LESS
 const float lightLevelCurve = 1.2f;
-
-// remove this if you want an unlocked fps (may cause the animation to be unstable/variable speed)
+// remove this if you want an unlocked fps (may cause the animation to be unstable/variable speed) - default 300 Hz/fps
 #define FPS_LOCK 300
-
 //// LED setup
 SK6812 LED(LED_COUNT);
 
@@ -206,11 +212,11 @@ void nextFrame() {
       break;
 
     case LedState::SLEEP:
-      nextSleepBreathingFrame(frameCount, SLEEP_MIN_LEVEL, SLEEP_MAX_LEVEL, SLEEP_BREATH_COUNT, SLEEP_BREATH_INTERVAL);
+      nextSleepBreathingFrame(frameCount, SLEEP_MIN_LEVEL, SLEEP_MAX_LEVEL, SLEEP_BREATH_COUNT, SLEEP_BREATH_INTERVAL, SLEEP_BREATHE_DOWN_PAUSE_TIME, SLEEP_BREATHE_UP_PAUSE_TIME);
       break;
 
     case LedState::PENDING_CON:
-      nextSleepBreathingFrame(frameCount, PENDING_MIN_LEVEL, PENDING_MAX_LEVEL, 1, 0);
+      nextSleepBreathingFrame(frameCount, PENDING_MIN_LEVEL, PENDING_MAX_LEVEL, 1, 0, PENDING_BREATH_PAUSE_TIME, PENDING_BREATH_PAUSE_TIME);
       break;
   }
 }
@@ -236,7 +242,15 @@ void delayAnimation(uint32_t delayMillis) {
 }
 
 // calculate next frame for "breathing" animation, which is a slow fade up (up to maxLevel) and down (down to minLevel)
-void nextSleepBreathingFrame(int frameCount, const int minLevel, const int maxLevel, const int maxBreathCount, const int breathInterval) {
+void nextSleepBreathingFrame(
+  int frameCount, 
+  const int minLevel, 
+  const int maxLevel, 
+  const int maxBreathCount,
+  const int breathInterval,
+  const int breatheDownPauseTime, 
+  const int breatheUpPauseTime
+) {
   int elapsedSinceLastBreath = millis() - lastSleepBreathTime;
 
   if (minLevel >= maxLevel) {
@@ -256,19 +270,19 @@ void nextSleepBreathingFrame(int frameCount, const int minLevel, const int maxLe
   }
 
   if (breatheDown) {
-    if ((frameCount % 3) != 0) return; // breathe down is slower (33.3%)
+    if ((frameCount % 4) != 0) return; // breathe down is slower (25%)
     breatheDownTo(minLevel);
     if (!breatheDown) {
       lastSleepBreathTime = millis();
       sleepBreathCounter -= 1;
-      delayAnimation(BREATHE_DOWN_HOLD_TIME);
+      delayAnimation(breatheDownPauseTime);
     }
   } else {
     if ((frameCount % 2) == 0) return; // slow down the animation (50%)
     breatheUpTo(maxLevel);
     if (currentLevel.level >= maxLevel) {
       breatheDown = true;
-      delayAnimation(BREATHE_UP_HOLD_TIME);
+      delayAnimation(breatheUpPauseTime);
     }
   }
 }
