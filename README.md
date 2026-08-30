@@ -8,6 +8,7 @@ The project assumes you have ports USB powered even if the PC is turned off (thu
 
 - Nice white glow
 - Smooth animation/transition
+- Customizable color and animation settings
 - Turns on with your Windows PC, turns off when you turn off your PC
 - Works with USB power when shut down (and without it)
 - Sleep “breathing” animation (requires USB power when suspended)

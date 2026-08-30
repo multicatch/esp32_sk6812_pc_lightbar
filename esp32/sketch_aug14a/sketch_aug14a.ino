@@ -19,11 +19,25 @@
 // turn off LEDs if agent on PC didn't connect (if true, then ESP32 will wait the above time and turn off; if false, the LEDs will "breathe" as long as the PC is connected)
 const bool turnOffAfterFailedAgentConnection = true;
 
+////// PC OFF SETTINGS /////
+// color of the glow of the LED strip when the PC is OFF (RGBW value)
+RGBW offColor = { 0, 0, 0, 0 };
+// brightness of the LED strip when the PC if OFF as % (min: 0, max: 100.0)
+#define OFF_BRIGHTNESS 0.0f
+
+////// PC WAKE SETTINGS //////
+// color of the glow of the LED strip when the PC is ON (RGBW value)
+RGBW wakeColor = { 0, 0, 0, 10 };
+// brightness of the LED strip when the PC is ON as % (min: 0, max: 100.0)
+#define WAKE_BRIGHTNESS 100.0f
+
 ////// SLEEP ANIMATION SEETTINGS //////
-// minimum light level of sleep animation (breathing)
-#define SLEEP_MIN_LEVEL 0
-// maximum light level of sleep animation (breathing)
-#define SLEEP_MAX_LEVEL 6
+// color of sleep glow as RGBW value
+RGBW sleepColor = { 0, 0, 0, 10 };
+// minimum light level of sleep animation (breathing) as brightness %
+#define SLEEP_MIN_LEVEL 0.0f
+// maximum light level of sleep animation (breathing) as brightness %
+#define SLEEP_MAX_LEVEL 70.0f
 
 // sleep animation will make a pause between a sequence of "breaths", this is the duration of this pause
 #define SLEEP_BREATH_INTERVAL 5000
@@ -31,33 +45,48 @@ const bool turnOffAfterFailedAgentConnection = true;
 #define SLEEP_BREATH_COUNT 1
 
 // how long to "hold" the breath animation on max light level (ms)
-#define SLEEP_BREATHE_UP_PAUSE_TIME 700
+#define SLEEP_BREATHE_UP_PAUSE_TIME 500
 // how long to "hold" the breath animation on min light level (ms)
 #define SLEEP_BREATHE_DOWN_PAUSE_TIME 700
 
+
 ////// PENDING CONNECTION ANIMATION SETTINGS ////
+// color of pending connection glow as RGBW value
+RGBW pendingConnectionColor = { 0, 0, 0, 10 };
 // minimum light level during connection pending breathing
-#define PENDING_MIN_LEVEL 5
+#define PENDING_MIN_LEVEL 0.0f
 // maximum light level during connection pending breathing
-#define PENDING_MAX_LEVEL 7
+#define PENDING_MAX_LEVEL 100.0f
 
 // how long to "hold" the pending animation on breathe up/down 
 #define PENDING_BREATH_PAUSE_TIME 100
 
+
 ////// GENERAL GLOW SETTINGS //////
-// brightness curve - how the light "blends" (higher number = wider light, lower number = narrow light); CANNOT BE 0.0f OR LESS
+// how fast the animation should change the color
+const float lightAnimationStep = 1.0f;
+// a difference in light level between two "pixels" when rendering the glow; this value describes how wide or narrow the glow should be (bigger number = narrower light) 
+const float lightPixelGlowStep = 10.0f;
+// brightness curve - how the light "blends" (higher number = wider and dimmer, lower number = narrower and brighter); CANNOT BE 0.0f OR LESS
 const float lightLevelCurve = 1.2f;
 // remove this if you want an unlocked fps (may cause the animation to be unstable/variable speed) - default 300 Hz/fps
 #define FPS_LOCK 300
+
+
 //// LED setup
 SK6812 LED(LED_COUNT);
 
-typedef struct LightLevel {
-  uint8_t level;
-  uint8_t sublevel;
-} LightLevel_t;
+//// RGBW utils
+struct HSVColor {
+  float h, s, v;
+};
 
-LightLevel_t currentLevel = { 0, 0 };
+struct DitheredRGB {
+  float r, g, b;
+};
+
+RGBW currentColor = { 0, 0, 0, 0 };
+float currentLevel = 0.0f; // percentage value, max: 100.0f
 
 //// ANIMATION 
 int lastFrameTime = 0;
@@ -158,7 +187,7 @@ void loop() {
   }
   #endif
 
-  renderWhiteGlow(currentLevel);
+  renderGlow(currentColor, currentLevel);
 }
 
 
@@ -192,7 +221,9 @@ void nextFrame() {
   }
   frameCount += 1;
   if (currentState != targetState) {
-    breatheDownTo(0);
+    if (breatheDownTo(0)) {
+      switchColor();
+    }
     resetAnimationCounters(); // reset counters for sleep/pending animation
     return;
   }
@@ -204,11 +235,11 @@ void nextFrame() {
 
   switch (currentState) {
     case LedState::OFF:
-      breatheDownTo(0);
+      breatheUpTo(OFF_BRIGHTNESS);
       break;
 
     case LedState::WAKE:
-      breatheUpTo(12);
+      breatheUpTo(WAKE_BRIGHTNESS);
       break;
 
     case LedState::SLEEP:
@@ -217,6 +248,23 @@ void nextFrame() {
 
     case LedState::PENDING_CON:
       nextSleepBreathingFrame(frameCount, PENDING_MIN_LEVEL, PENDING_MAX_LEVEL, 1, 0, PENDING_BREATH_PAUSE_TIME, PENDING_BREATH_PAUSE_TIME);
+      break;
+  }
+}
+
+void switchColor() {
+  switch (targetState) {
+    case LedState::OFF:
+      currentColor = offColor;
+      break;
+    case LedState::WAKE:
+      currentColor = wakeColor;
+      break;
+    case LedState::SLEEP:
+      currentColor = sleepColor;
+      break;
+    case LedState::PENDING_CON:
+      currentColor = pendingConnectionColor;
       break;
   }
 }
@@ -244,8 +292,8 @@ void delayAnimation(uint32_t delayMillis) {
 // calculate next frame for "breathing" animation, which is a slow fade up (up to maxLevel) and down (down to minLevel)
 void nextSleepBreathingFrame(
   int frameCount, 
-  const int minLevel, 
-  const int maxLevel, 
+  const float minLevel, 
+  const float maxLevel, 
   const int maxBreathCount,
   const int breathInterval,
   const int breatheDownPauseTime, 
@@ -254,7 +302,7 @@ void nextSleepBreathingFrame(
   int elapsedSinceLastBreath = millis() - lastSleepBreathTime;
 
   if (minLevel >= maxLevel) {
-    if (currentLevel.level < minLevel) {
+    if (currentLevel < minLevel) {
       breatheUpTo(minLevel);
     } else {
       breatheDownTo(minLevel);
@@ -271,44 +319,46 @@ void nextSleepBreathingFrame(
 
   if (breatheDown) {
     if ((frameCount % 4) != 0) return; // breathe down is slower (25%)
-    breatheDownTo(minLevel);
-    if (!breatheDown) {
+    if (breatheDownTo(minLevel)) {
       lastSleepBreathTime = millis();
       sleepBreathCounter -= 1;
       delayAnimation(breatheDownPauseTime);
     }
   } else {
     if ((frameCount % 2) == 0) return; // slow down the animation (50%)
-    breatheUpTo(maxLevel);
-    if (currentLevel.level >= maxLevel) {
+    if (breatheUpTo(maxLevel)) {
       breatheDown = true;
       delayAnimation(breatheUpPauseTime);
     }
   }
 }
 
-void breatheDownTo(uint8_t target) {
-  if (target >= currentLevel.level && currentLevel.sublevel == 0) {
+bool breatheDownTo(float target) {
+  if (target >= currentLevel) {
     duringAnimation = false;
     breatheDown = false;
-    return;
+    return true;
   } else {
     duringAnimation = true;
     breatheDown = true; 
   }
-  whiteDown();
+  
+  currentLevel = max(0.0f, currentLevel - lightAnimationStep);
+  return currentLevel == 0.0f || currentLevel <= target;
 }
 
-void breatheUpTo(uint8_t target) {
-  if (target <= currentLevel.level) {
+bool breatheUpTo(float target) {
+  if (target <= currentLevel) {
     duringAnimation = false;
     breatheDown = false;
-    return;
+    return true;
   } else {
     duringAnimation = true;
     breatheDown = false;
   }
-  whiteUp();
+  
+  currentLevel = min(100.0f, currentLevel + lightAnimationStep);
+  return currentLevel == 100.0f || currentLevel >= target;
 } 
 
 void turnOff() {
@@ -318,71 +368,115 @@ void turnOff() {
   LED.sync();
 }
 
-void whiteDown() {
-  if (currentLevel.level <= 0 && currentLevel.sublevel <= 0) {
-    currentLevel.level = 0;
-    currentLevel.sublevel = 0;
-    return;
-  }
-  if (currentLevel.sublevel <= 0) {
-    currentLevel.level -= 1;
-    currentLevel.sublevel = 15;
-  } else {
-    currentLevel.sublevel -= 1;
-  }
-}
+///// RENDER UTILS ////
 
-void whiteUp() {
-  if (currentLevel.level >= 255) {
-    currentLevel.sublevel = 0;
-    currentLevel.level = 255;
-    return;
-  }
-  currentLevel.sublevel += 1;
-  if (currentLevel.sublevel >= 16) {
-    currentLevel.level += 1;
-    currentLevel.sublevel = 0;
-  }
-}
+// dither step for each pixel (rgbw = 4 channels) 
+int ditherStep[LED_COUNT][4] = {0};
 
-int ditherStep = 0;
-
-void renderWhiteGlow(LightLevel_t targetLevel) {
-  if (targetLevel.level == 255) {
-    setWhiteGlowLevel(targetLevel.level);
-    return;
-  }
-  // temporal sigma-delta dithering
-  uint8_t normalizedSub = min(targetLevel.sublevel, (uint8_t) 15);
-  ditherStep += normalizedSub;
-
-  uint8_t adjustedLevel = targetLevel.level;
-  if (ditherStep >= 16) {
-    ditherStep -= 16;
-    adjustedLevel += 1;
-  }
-  setWhiteGlowLevel(adjustedLevel);
-}
-
-void setWhiteGlowLevel(uint8_t targetLevel) {
+void renderGlow(RGBW color, float targetLevel) {
   int center = (LED_COUNT / 2) - 1;
   for (uint8_t i = 0; i < LED_COUNT; i++) {
     int distance = abs((int) i - center);
-    uint8_t level = (uint8_t) max(targetLevel - distance, 0);
-    uint8_t adjustedLevel = calculateAdjustedBrightness(level, lightLevelCurve);
-    //Serial.printf("%d: %d %d\n", i, level, adjustedLevel);
-    LED.set_rgbw(i, {0, 0, 0, adjustedLevel});
+    float pixelLevel = max(targetLevel - (distance * lightPixelGlowStep), 0.0f);
+
+    HSVColor hsv = rgbToHsv(currentColor);
+    hsv.v = normalizeLightLevel(hsv.v, pixelLevel);
+    DitheredRGB adjustedRGB = hsvToRgb(hsv);
+    uint8_t r = dither(i, 0, adjustedRGB.r);
+    uint8_t g = dither(i, 1, adjustedRGB.g);
+    uint8_t b = dither(i, 2, adjustedRGB.b);
+    uint8_t w = dither(i, 3, normalizeLightLevel(currentColor.w, pixelLevel));
+
+    LED.set_rgbw(i, {r, g, b, w});
+    //Serial.printf("%d %d %d %d %d\n", i, r, g, b, w);
   }
   LED.sync(); 
 }
 
-uint8_t calculateAdjustedBrightness(const uint8_t brightness, const float dimCurve) {
+HSVColor rgbToHsv(RGBW color) {
+  float r = color.r / 255.0f;
+  float g = color.g / 255.0f;
+  float b = color.b / 255.0f;
+  
+  float maxVal = max(r, max(g, b));
+  float minVal = min(r, min(g, b));
+  float delta = maxVal - minVal;
+
+  float s;
+  if (maxVal <= 0.0f) {
+    s = 0.0f;
+  } else {
+    s = delta / maxVal;
+  }
+
+  float h;
+  if (delta == 0.0f) {
+    h = 0.0f;
+  } else if (maxVal == r) {
+    h = 60.0f * fmod((g - b) / delta, 6.0f);
+  } else if (maxVal == g) {
+    h = 60.0f * (((b - r) / delta) + 2.0f);
+  } else {
+    h = 60.0f * (((r - g) / delta) + 4.0f);
+  }
+  if (h < 0.0f) {
+    h += 360.0f;
+  }
+  return { h, s, maxVal };
+}
+
+DitheredRGB hsvToRgb(HSVColor hsv) {
+  float C = hsv.v * hsv.s;
+  float X = C * (1.0f - fabs(fmod(hsv.h / 60.0f, 2.0f) - 1.0f));
+  float m = hsv.v - C;
+
+  if (hsv.h < 60.0f) {
+    return finishRGBConv(C, X, 0.0f, m);
+  } else if (hsv.h < 120.0f) {
+    return finishRGBConv(X, C, 0.0f, m);
+  } else if (hsv.h < 180.0f) {
+    return finishRGBConv(0.0f, C, X, m);
+  } else if (hsv.h < 240.0f) {
+    return finishRGBConv(0.0f, X, C, m);
+  } else if (hsv.h < 300.0f) {
+    return finishRGBConv(X, 0.0f, C, m);
+  } else {
+    return finishRGBConv(C, 0.0f, X, m);
+  }
+}
+
+DitheredRGB finishRGBConv(float r, float g, float b, float m) {
+  return { (r + m) * 255.0f, (g + m) * 255.0f, (b + m) * 255.0f };
+}
+
+uint8_t dither(int i, int colorIndex, float value) {
+  uint8_t floorValue = (uint8_t) value;
+  int subLevel = (int) ((value - floorValue) * 100.0f);
+  ditherStep[i][colorIndex] += subLevel;
+
+  if (ditherStep[i][colorIndex] >= 100) {
+    ditherStep[i][colorIndex] -= 100;
+    return floorValue += 1;
+  } else {
+    return floorValue;
+  }
+}
+
+float normalizeLightLevel(float color, float pixelLevel) {
+  return calculateAdjustedBrightness((pixelLevel * color) / 100.0f, lightLevelCurve);
+}
+
+float normalizeLightLevel(uint8_t color, float pixelLevel) {
+  return calculateAdjustedBrightness((pixelLevel * color) / 100.0f, lightLevelCurve);
+}
+
+float calculateAdjustedBrightness(const float brightness, const float dimCurve) {
   float xn = brightness / 255.0;
   float adjusted = 255.0 * pow(xn, dimCurve);
-  uint8_t newBrightness = (uint8_t) adjusted;
-  if (brightness > 0 && newBrightness == 0) {
-    newBrightness = 1;
+  float newBrightness = adjusted;
+  if (brightness > 0 && newBrightness <= 0) {
+    newBrightness = 0.1f;
   }
-  return newBrightness;
+  return min(max(newBrightness, 0.0f), 255.0f);
 }
 

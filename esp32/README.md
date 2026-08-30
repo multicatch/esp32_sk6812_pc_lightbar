@@ -7,6 +7,7 @@ This folder contains source code for ESP32 firmware that will control and play a
 - pending connection animation
 - sleep mode animation
 - customizable animations (see the comments at the start of the source code)
+- customizable color of sleep, wake, pending, off state
 - turns off with your PC (even if you have USB power when the PC is turned off)
 
 ## Schematics
