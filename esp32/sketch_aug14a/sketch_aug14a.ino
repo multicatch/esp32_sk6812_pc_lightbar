@@ -15,7 +15,7 @@
 // time to wait for agent to connect (after Windows startup)
 #define WAIT_FOR_CONNECTION_TIME 90000
 // timeout of USB connection; sometimes Windows stop talking to the USB and resume polling after a delay, this timeout defines how long to wait for next polling 
-#define USB_TIMEOUT 10000
+#define USB_TIMEOUT 20000
 // turn off LEDs if agent on PC didn't connect (if true, then ESP32 will wait the above time and turn off; if false, the LEDs will "breathe" as long as the PC is connected)
 const bool turnOffAfterFailedAgentConnection = true;
 
@@ -27,7 +27,7 @@ RGBW offColor = { 0, 0, 0, 0 };
 
 ////// PC WAKE SETTINGS //////
 // color of the glow of the LED strip when the PC is ON (RGBW value)
-RGBW wakeColor = { 0, 0, 0, 10 };
+RGBW wakeColor = { 0, 0, 0, 12 };
 // brightness of the LED strip when the PC is ON as % (min: 0, max: 100.0)
 #define WAKE_BRIGHTNESS 100.0f
 
@@ -40,7 +40,7 @@ RGBW sleepColor = { 0, 0, 0, 10 };
 #define SLEEP_MAX_LEVEL 70.0f
 
 // sleep animation will make a pause between a sequence of "breaths", this is the duration of this pause
-#define SLEEP_BREATH_INTERVAL 5000
+#define SLEEP_BREATH_INTERVAL 1000
 // sleep animation will make a few "breaths" and make a pause, this is the number of said "breaths" (for example, if you want a 3 consecutive breaths before a longer pause, set this to 3)
 #define SLEEP_BREATH_COUNT 1
 
@@ -54,7 +54,7 @@ RGBW sleepColor = { 0, 0, 0, 10 };
 // color of pending connection glow as RGBW value
 RGBW pendingConnectionColor = { 0, 0, 0, 10 };
 // minimum light level during connection pending breathing
-#define PENDING_MIN_LEVEL 0.0f
+#define PENDING_MIN_LEVEL 30.0f
 // maximum light level during connection pending breathing
 #define PENDING_MAX_LEVEL 100.0f
 
@@ -62,16 +62,30 @@ RGBW pendingConnectionColor = { 0, 0, 0, 10 };
 #define PENDING_BREATH_PAUSE_TIME 100
 
 
+//// BREATHE ANIMATION SETTINGS ////
+// how fast should "breathe up" animation play (1.0 - original speed; 0.6 - 60%)
+#define BREATHE_UP_RATE 0.6
+// how fast should "breathe down" animation play (1.0 - original speed; 0.33 - 33%)
+#define BREATHE_DOWN_RATE 0.33
+
+
 ////// GENERAL GLOW SETTINGS //////
 // how fast the animation should change the color
-const float lightAnimationStep = 1.0f;
+const float lightAnimationStep = 0.75f;
 // a difference in light level between two "pixels" when rendering the glow; this value describes how wide or narrow the glow should be (bigger number = narrower light) 
-const float lightPixelGlowStep = 10.0f;
+const float lightPixelGlowStep = 7.5f;
 // brightness curve - how the light "blends" (higher number = wider and dimmer, lower number = narrower and brighter); CANNOT BE 0.0f OR LESS
 const float lightLevelCurve = 1.2f;
-// remove this if you want an unlocked fps (may cause the animation to be unstable/variable speed) - default 300 Hz/fps
-#define FPS_LOCK 300
 
+// remove this if you want an unlocked refresh rate (may cause the animation to be unstable/variable speed) - default 333 Hz
+#define REFRESH_RATE 333
+// target FPS (frames per second) - should be lower than refresh rate for proper dithering (default 100 fps), this value changes how fast the next animation frame is calculated 
+#define TARGET_FPS 100
+
+// maximum dithering range (resolution)
+#define DITHERING_LEVELS 1000
+// minimum light level (low brightness values will cause flickering, if you notice flickering then bump this value; if you notice "jumps" then lower this value)
+#define DITHERING_THRESHOLD 0.15
 
 //// LED setup
 SK6812 LED(LED_COUNT);
@@ -86,14 +100,16 @@ struct DitheredRGB {
 };
 
 RGBW currentColor = { 0, 0, 0, 0 };
+HSVColor currentHSV = { 0, 0, 0 };
 float currentLevel = 0.0f; // percentage value, max: 100.0f
 
 //// ANIMATION 
 int lastFrameTime = 0;
 int frameCount = 0;
-#ifdef FPS_LOCK
+constexpr uint32_t targetFrameInterval = 1'000'000 / TARGET_FPS;
+#ifdef REFRESH_RATE
 uint32_t nextFrameTime = 0;
-constexpr uint32_t targetRenderInterval = 1'000'000 / FPS_LOCK;
+constexpr uint32_t targetRenderInterval = 1'000'000 / REFRESH_RATE;
 #endif
 
 bool breatheDown = false;
@@ -114,7 +130,6 @@ typedef enum LedState {
 LedState_t currentState = LedState::OFF;
 LedState_t targetState = LedState::OFF;
 
-
 //// MAIN PROGRAM
 void setup() {
   Serial.begin(115200);
@@ -125,7 +140,7 @@ void setup() {
   lastCommunicationTime = millis();
   setState(LedState::OFF);
 }
-
+int tim = 0;
 void loop() {
   bool commandReceived = false;
   if (Serial.available()) {
@@ -166,9 +181,9 @@ void loop() {
     setState(LedState::OFF);
   }
 
-  if ((millis() - lastFrameTime) >= 10) { // we need to calculate frames every 10ms or more because we are dithering LEDs in between them
+  if ((micros() - lastFrameTime) >= targetFrameInterval) {
     nextFrame();
-    lastFrameTime = millis();
+    lastFrameTime = micros();
 
     if (!duringAnimation && targetState != currentState) { // we transition the animation/state only after the frames are rendered
       Serial.printf("Setting state: %d\n", targetState);
@@ -176,18 +191,11 @@ void loop() {
     }
   }
 
-  #ifdef FPS_LOCK
-  uint32_t now = micros();
-  if (now < nextFrameTime) {
+  if (!ensureConstantRefreshRate()) {
     return;
   }
-  nextFrameTime += targetRenderInterval;
-  if (nextFrameTime <= now) { // we are lagging behind
-    nextFrameTime = now + targetRenderInterval;
-  }
-  #endif
 
-  renderGlow(currentColor, currentLevel);
+  renderGlow(currentColor, currentHSV, currentLevel);
 }
 
 
@@ -267,6 +275,7 @@ void switchColor() {
       currentColor = pendingConnectionColor;
       break;
   }
+  currentHSV = rgbToHsv(currentColor);
 }
 
 int scheduledDelayEnd = 0;
@@ -318,14 +327,14 @@ void nextSleepBreathingFrame(
   }
 
   if (breatheDown) {
-    if ((frameCount % 4) != 0) return; // breathe down is slower (25%)
+    if (frameCount % (int)(1.0f / BREATHE_DOWN_RATE) != 0) return; // optional slowdown
     if (breatheDownTo(minLevel)) {
       lastSleepBreathTime = millis();
       sleepBreathCounter -= 1;
       delayAnimation(breatheDownPauseTime);
     }
   } else {
-    if ((frameCount % 2) == 0) return; // slow down the animation (50%)
+    if (frameCount % (int)(1.0f / BREATHE_UP_RATE) != 0) return; // optional slowdown
     if (breatheUpTo(maxLevel)) {
       breatheDown = true;
       delayAnimation(breatheUpPauseTime);
@@ -370,27 +379,41 @@ void turnOff() {
 
 ///// RENDER UTILS ////
 
-// dither step for each pixel (rgbw = 4 channels) 
+// dithering metadata for each pixel (rgbw = 4 channels) 
+uint8_t lastLightLevel[LED_COUNT][4] = {0};
 int ditherStep[LED_COUNT][4] = {0};
 
-void renderGlow(RGBW color, float targetLevel) {
+void renderGlow(RGBW color, HSVColor hsvColor, float targetLevel) {
   int center = (LED_COUNT / 2) - 1;
   for (uint8_t i = 0; i < LED_COUNT; i++) {
     int distance = abs((int) i - center);
     float pixelLevel = max(targetLevel - (distance * lightPixelGlowStep), 0.0f);
 
-    HSVColor hsv = rgbToHsv(currentColor);
+    HSVColor hsv = { hsvColor.h, hsvColor.s, hsvColor.v };
     hsv.v = normalizeLightLevel(hsv.v, pixelLevel);
     DitheredRGB adjustedRGB = hsvToRgb(hsv);
     uint8_t r = dither(i, 0, adjustedRGB.r);
     uint8_t g = dither(i, 1, adjustedRGB.g);
     uint8_t b = dither(i, 2, adjustedRGB.b);
-    uint8_t w = dither(i, 3, normalizeLightLevel(currentColor.w, pixelLevel));
-
+    uint8_t w = dither(i, 3, normalizeLightLevel(color.w, pixelLevel));
     LED.set_rgbw(i, {r, g, b, w});
     //Serial.printf("%d %d %d %d %d\n", i, r, g, b, w);
   }
   LED.sync(); 
+}
+
+bool ensureConstantRefreshRate() {
+  #ifdef REFRESH_RATE
+  uint32_t now = micros();
+  if (now < nextFrameTime) {
+    return false;
+  }
+  nextFrameTime += targetRenderInterval;
+  if (nextFrameTime <= now) { // we are lagging behind
+    nextFrameTime = now + targetRenderInterval;
+  }
+  #endif
+  return true;
 }
 
 HSVColor rgbToHsv(RGBW color) {
@@ -451,31 +474,42 @@ DitheredRGB finishRGBConv(float r, float g, float b, float m) {
 
 uint8_t dither(int i, int colorIndex, float value) {
   uint8_t floorValue = (uint8_t) value;
-  int subLevel = (int) ((value - floorValue) * 100.0f);
+  if (lastLightLevel[i][colorIndex] != floorValue) {
+    lastLightLevel[i][colorIndex] = floorValue;
+    ditherStep[i][colorIndex] = 0;
+    return floorValue;
+  }
+
+  float fraction = value - floorValue;
+  int subLevel = (int) (fraction * DITHERING_LEVELS);
   ditherStep[i][colorIndex] += subLevel;
 
-  if (ditherStep[i][colorIndex] >= 100) {
-    ditherStep[i][colorIndex] -= 100;
-    return floorValue += 1;
+  if (ditherStep[i][colorIndex] >= DITHERING_LEVELS) {
+    ditherStep[i][colorIndex] -= DITHERING_LEVELS;
+    if (value < DITHERING_THRESHOLD) {
+      return floorValue;
+    } else {
+      return floorValue + 1;
+    }
   } else {
     return floorValue;
   }
 }
 
 float normalizeLightLevel(float color, float pixelLevel) {
-  return calculateAdjustedBrightness((pixelLevel * color) / 100.0f, lightLevelCurve);
+  return calculateAdjustedBrightness((pixelLevel * color) / 100.0f, lightAnimationStep, lightLevelCurve);
 }
 
 float normalizeLightLevel(uint8_t color, float pixelLevel) {
-  return calculateAdjustedBrightness((pixelLevel * color) / 100.0f, lightLevelCurve);
+  return calculateAdjustedBrightness((pixelLevel * color) / 100.0f, lightAnimationStep, lightLevelCurve);
 }
 
-float calculateAdjustedBrightness(const float brightness, const float dimCurve) {
+float calculateAdjustedBrightness(const float brightness, const float minimumBrightness, const float dimCurve) {
   float xn = brightness / 255.0;
   float adjusted = 255.0 * pow(xn, dimCurve);
   float newBrightness = adjusted;
   if (brightness > 0 && newBrightness <= 0) {
-    newBrightness = 0.1f;
+    newBrightness = minimumBrightness;
   }
   return min(max(newBrightness, 0.0f), 255.0f);
 }
