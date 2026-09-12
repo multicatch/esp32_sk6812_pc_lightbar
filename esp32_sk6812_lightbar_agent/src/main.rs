@@ -25,7 +25,6 @@ const CONTROLLER_GREETING: &str = "ESP32-SK6812-LIGHTBAR-V1";
 
 const STALE_MESSAGE_TIME: Duration = Duration::from_secs(5);
 const SLEEP_CMD_QUIET_TIME: Duration = Duration::from_secs(10);
-const COMMAND_RETRIES: u32 = 3;
 
 #[derive(Debug, Clone)]
 struct LedbarCommandMessage(Instant, LedbarCommand);
@@ -108,9 +107,9 @@ unsafe extern "system" fn wnd_proc(
             if !tx_ptr.is_null() {
                 let event = wparam.0 as u32;
                 if event == PBT_APMSUSPEND {
-                    send_with_retry(&*tx_ptr, LedbarCommandMessage::new(Sleep));
+                    (&*tx_ptr).send(LedbarCommandMessage::new(Sleep)).unwrap();
+                    sleep(Duration::from_millis(10)); // buy us some time to make sure the command is sent to the controller
                 } else if event == PBT_APMRESUMEAUTOMATIC {
-                    // no retry needed here, the LED controlled will be "pinged" in the background
                     (&*tx_ptr).send(LedbarCommandMessage::new(Wake)).unwrap();
                 }
             }
@@ -118,18 +117,13 @@ unsafe extern "system" fn wnd_proc(
         } else if msg == WM_ENDSESSION {
             let tx_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const Sender<LedbarCommandMessage>;
             if !tx_ptr.is_null() && wparam.0 != 0 {
-                send_with_retry(&*tx_ptr, LedbarCommandMessage::new(ShutDown));
+                (&*tx_ptr).send(LedbarCommandMessage::new(ShutDown)).unwrap();
+                sleep(Duration::from_millis(10)); // buy us some time to make sure the command is sent to the controller
             }
             LRESULT(0)
         } else {
             DefWindowProcW(hwnd, msg, wparam, lparam)
         }
-    }
-}
-
-fn send_with_retry(tx: &Sender<LedbarCommandMessage>, cmd: LedbarCommandMessage) {
-    for _ in 0..COMMAND_RETRIES {
-        tx.send(cmd.clone()).unwrap();
     }
 }
 

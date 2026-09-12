@@ -1,5 +1,6 @@
 #include <SK6812.h>
 #include "driver/usb_serial_jtag.h"
+#include "esp_timer.h"
 
 /////// LED STRIP SETTINGS //////
 // how many LEDs you have on your strip
@@ -104,11 +105,11 @@ HSVColor currentHSV = { 0, 0, 0 };
 float currentLevel = 0.0f; // percentage value, max: 100.0f
 
 //// ANIMATION 
-int lastFrameTime = 0;
-int frameCount = 0;
+uint64_t lastFrameTime = 0;
+uint32_t frameCount = 0;
 constexpr uint32_t targetFrameInterval = 1'000'000 / TARGET_FPS;
 #ifdef REFRESH_RATE
-uint32_t nextFrameTime = 0;
+uint64_t lastRefreshTime = 0;
 constexpr uint32_t targetRenderInterval = 1'000'000 / REFRESH_RATE;
 #endif
 
@@ -116,8 +117,8 @@ bool breatheDown = false;
 bool duringAnimation = false;
 
 //// LED STATE
-int lastCommunicationTime = 0;
-int lastSerialConnectionTime = 0;
+uint64_t lastCommunicationTime = 0;
+uint64_t lastSerialConnectionTime = 0;
 bool connectionAttemptFailed = false;
 
 typedef enum LedState {
@@ -130,6 +131,15 @@ typedef enum LedState {
 LedState_t currentState = LedState::OFF;
 LedState_t targetState = LedState::OFF;
 
+//// TIME UTILS
+uint64_t esp32Micros() {
+  return esp_timer_get_time();
+}
+
+uint64_t esp32Millis() {
+  return esp32Micros() / 1000ULL;
+}
+
 //// MAIN PROGRAM
 void setup() {
   Serial.begin(115200);
@@ -137,7 +147,7 @@ void setup() {
   
   turnOff(); // clear
   
-  lastCommunicationTime = millis();
+  lastCommunicationTime = esp32Millis();
   setState(LedState::OFF);
 }
 int tim = 0;
@@ -146,34 +156,36 @@ void loop() {
   if (Serial.available()) {
     int command = Serial.read();
     if (command != -1 && command != '\n') {
-      connectionAttemptFailed = false;
-      commandReceived = true;
-      process_command(command);
+      commandReceived = process_command(command);
     }
   }
 
+  if (commandReceived) {
+    connectionAttemptFailed = false;
+  }
+
   if (!commandReceived) { // no command received, assuming dead connection
-    if (currentState == LedState::WAKE && (elapsedSinceCommand() > AUTO_OFF_TIME)) {
+    if (currentState == LedState::WAKE && (elapsedSinceCommand(AUTO_OFF_TIME))) {
       setState(LedState::OFF);
     }
-    if (currentState == LedState::PENDING_CON && (elapsedSinceCommand() > WAIT_FOR_CONNECTION_TIME) && turnOffAfterFailedAgentConnection) {
+    if (currentState == LedState::PENDING_CON && elapsedSinceCommand(WAIT_FOR_CONNECTION_TIME) && turnOffAfterFailedAgentConnection) {
       connectionAttemptFailed = true;
       setState(LedState::OFF);
     }
   }
 
   bool pcConnected = usb_serial_jtag_is_connected();
-  bool turnOffQuietPeriodEnded = elapsedSinceCommand() > TURN_OFF_QUIET_PERIOD;
+  bool turnOffQuietPeriodEnded = elapsedSinceCommand(TURN_OFF_QUIET_PERIOD);
   bool lightsTurnedOff = currentState == LedState::OFF && targetState == LedState::OFF;
 
   if (pcConnected) {
-    lastSerialConnectionTime = millis();
+    lastSerialConnectionTime = esp32Millis();
   }
 
   if (!connectionAttemptFailed && pcConnected && turnOffQuietPeriodEnded && lightsTurnedOff) {
     // we connected to the USB data (probably Windows started USB polling), thus the PC is ON
     setState(LedState::PENDING_CON);
-  } else if (!pcConnected && currentState == LedState::PENDING_CON && (millis() - lastSerialConnectionTime > USB_TIMEOUT)) {
+  } else if (!pcConnected && currentState == LedState::PENDING_CON && elapsed(esp32Millis(), lastSerialConnectionTime, USB_TIMEOUT)) {
     // we sensed USB connection (PENDING_CON) and then lost it (assuming the PC is turned off)
     if (turnOffAfterFailedAgentConnection) {
       connectionAttemptFailed = true;
@@ -181,9 +193,9 @@ void loop() {
     setState(LedState::OFF);
   }
 
-  if ((micros() - lastFrameTime) >= targetFrameInterval) {
+  if (elapsed(esp32Micros(), lastFrameTime, targetFrameInterval)) {
     nextFrame();
-    lastFrameTime = micros();
+    lastFrameTime = esp32Micros();
 
     if (!duringAnimation && targetState != currentState) { // we transition the animation/state only after the frames are rendered
       Serial.printf("Setting state: %d\n", targetState);
@@ -203,24 +215,38 @@ void loop() {
 
 void setState(LedState_t state) {
   targetState = state;
-  lastCommunicationTime = millis();
+  lastCommunicationTime = esp32Millis();
 }
 
-void process_command(int command) {
+bool process_command(int command) {
   if (command == 'W') {
     setState(LedState::WAKE);
+    return true;
   } else if (command == 'S') {
     setState(LedState::SLEEP);
+    return true;
   } else if (command == 'Z') {
     setState(LedState::OFF);
+    return true;
   } else if (command == 'H') {
     Serial.println("ESP32-SK6812-LIGHTBAR-V1");
     setState(LedState::WAKE);
+    return true;
   }
+  return false;
 }
 
-int elapsedSinceCommand() {
-  return millis() - lastCommunicationTime;
+boolean elapsedSinceCommand(uint64_t timeMs) {
+  return elapsed(esp32Millis(), lastCommunicationTime, timeMs);
+}
+
+boolean elapsed(uint64_t now, uint64_t scheduleTime, uint64_t duration) {
+  uint64_t end = scheduleTime + duration;
+  if (end < scheduleTime) { // overflow
+    return now <= scheduleTime && now > end;
+  } else {
+    return now > end;
+  }
 }
 
 void nextFrame() {
@@ -230,6 +256,7 @@ void nextFrame() {
   frameCount += 1;
   if (currentState != targetState) {
     if (breatheDownTo(0)) {
+      turnOff();
       switchColor();
     }
     resetAnimationCounters(); // reset counters for sleep/pending animation
@@ -278,24 +305,27 @@ void switchColor() {
   currentHSV = rgbToHsv(currentColor);
 }
 
-int scheduledDelayEnd = 0;
+uint64_t scheduledDelayAt = 0;
+uint64_t scheduledDelayDuration = 0;
 int sleepBreathCounter = 0;
-int lastSleepBreathTime = 0;
+uint64_t lastSleepBreathTime = 0;
 
 void resetAnimationCounters() {
   sleepBreathCounter = 0;
   lastSleepBreathTime = 0;
-  scheduledDelayEnd = 0;
+  scheduledDelayAt = 0;
+  scheduledDelayDuration = 0;
 }
 
 // returns false if a non-blocking delay was scheduled
 bool shouldHoldAnimation() {
-  return scheduledDelayEnd > millis();
+  return !elapsed(esp32Millis(), scheduledDelayAt, scheduledDelayDuration);
 }
 
 // non-blocking delay
 void delayAnimation(uint32_t delayMillis) {
-  scheduledDelayEnd = millis() + delayMillis;
+  scheduledDelayAt = esp32Millis();
+  scheduledDelayDuration = delayMillis;
 }
 
 // calculate next frame for "breathing" animation, which is a slow fade up (up to maxLevel) and down (down to minLevel)
@@ -308,8 +338,6 @@ void nextSleepBreathingFrame(
   const int breatheDownPauseTime, 
   const int breatheUpPauseTime
 ) {
-  int elapsedSinceLastBreath = millis() - lastSleepBreathTime;
-
   if (minLevel >= maxLevel) {
     if (currentLevel < minLevel) {
       breatheUpTo(minLevel);
@@ -319,7 +347,7 @@ void nextSleepBreathingFrame(
     return;
   }
 
-  if (sleepBreathCounter == 0 && elapsedSinceLastBreath < breathInterval) {
+  if (sleepBreathCounter == 0 && !elapsed(esp32Millis(), lastSleepBreathTime, breathInterval)) {
     return;
   }
   if (sleepBreathCounter <= 0) {
@@ -329,7 +357,7 @@ void nextSleepBreathingFrame(
   if (breatheDown) {
     if (frameCount % (int)(1.0f / BREATHE_DOWN_RATE) != 0) return; // optional slowdown
     if (breatheDownTo(minLevel)) {
-      lastSleepBreathTime = millis();
+      lastSleepBreathTime = esp32Millis();
       sleepBreathCounter -= 1;
       delayAnimation(breatheDownPauseTime);
     }
@@ -404,14 +432,11 @@ void renderGlow(RGBW color, HSVColor hsvColor, float targetLevel) {
 
 bool ensureConstantRefreshRate() {
   #ifdef REFRESH_RATE
-  uint32_t now = micros();
-  if (now < nextFrameTime) {
+  uint64_t now = esp32Micros();
+  if (!elapsed(now, lastRefreshTime, targetRenderInterval)) {
     return false;
   }
-  nextFrameTime += targetRenderInterval;
-  if (nextFrameTime <= now) { // we are lagging behind
-    nextFrameTime = now + targetRenderInterval;
-  }
+  lastRefreshTime = now;
   #endif
   return true;
 }
