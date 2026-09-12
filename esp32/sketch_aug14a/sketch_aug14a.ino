@@ -236,11 +236,11 @@ bool process_command(int command) {
   return false;
 }
 
-boolean elapsedSinceCommand(uint64_t timeMs) {
+bool elapsedSinceCommand(uint64_t timeMs) {
   return elapsed(esp32Millis(), lastCommunicationTime, timeMs);
 }
 
-boolean elapsed(uint64_t now, uint64_t scheduleTime, uint64_t duration) {
+bool elapsed(uint64_t now, uint64_t scheduleTime, uint64_t duration) {
   uint64_t end = scheduleTime + duration;
   if (end < scheduleTime) { // overflow
     return now <= scheduleTime && now > end;
@@ -250,9 +250,6 @@ boolean elapsed(uint64_t now, uint64_t scheduleTime, uint64_t duration) {
 }
 
 void nextFrame() {
-  if (frameCount == INT_MAX) {
-    frameCount = -1;
-  }
   frameCount += 1;
   if (currentState != targetState) {
     if (breatheDownTo(0)) {
