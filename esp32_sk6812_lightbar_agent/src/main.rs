@@ -8,13 +8,10 @@ use std::sync::mpsc::{Receiver, Sender};
 use std::thread;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
-use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
+use windows::Win32::Foundation::{HANDLE, HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows::Win32::UI::WindowsAndMessaging::{
-    CREATESTRUCTW, CreateWindowExW, DefWindowProcW, DispatchMessageW, GWLP_USERDATA, GetMessageW,
-    GetWindowLongPtrW, MSG, PBT_APMRESUMEAUTOMATIC, PBT_APMSUSPEND, RegisterClassW,
-    SetWindowLongPtrW, WINDOW_EX_STYLE, WM_ENDSESSION, WM_NCCREATE, WM_POWERBROADCAST, WNDCLASSW,
-};
+use windows::Win32::System::Power::{HPOWERNOTIFY, RegisterSuspendResumeNotification, UnregisterSuspendResumeNotification};
+use windows::Win32::UI::WindowsAndMessaging::{CREATESTRUCTW, CreateWindowExW, DEVICE_NOTIFY_WINDOW_HANDLE, DefWindowProcW, DispatchMessageW, GWLP_USERDATA, GetMessageW, GetWindowLongPtrW, MSG, PBT_APMRESUMEAUTOMATIC, PBT_APMSUSPEND, RegisterClassW, SetWindowLongPtrW, WINDOW_EX_STYLE, WM_ENDSESSION, WM_NCCREATE, WM_POWERBROADCAST, WNDCLASSW};
 use windows::core::PCWSTR;
 
 const CLASS_NAME: PCWSTR = windows::core::w!("SK6812LightbarAgent");
@@ -45,6 +42,31 @@ enum LedbarCommand {
 pub struct Broadcast<T: Clone> {
     tx: Receiver<T>,
     subscribers: Vec<Sender<T>>,
+}
+
+pub struct WindowHandle {
+    power_event_sub: HPOWERNOTIFY,
+}
+
+impl WindowHandle {
+    fn unregister_subs(&self) {
+        unsafe {
+            if let Err(e) = UnregisterSuspendResumeNotification(self.power_event_sub) {
+                eprintln!("Error when unregistering subscription to power events: {}", e);
+                // Oh well, it probably means we were never registered in the first place
+                // or Windows just rejected our sub... :c Nothing to worry about, anyways.
+            }
+        }
+    }
+}
+
+impl Drop for WindowHandle {
+    fn drop(&mut self) {
+        if self.power_event_sub.is_invalid() {
+            return;
+        }
+        self.unregister_subs();
+    }
 }
 
 impl<T: Clone> Broadcast<T> {
@@ -136,7 +158,7 @@ fn main() -> windows::core::Result<()> {
         broadcast.run_broadcast();
     });
 
-    create_hidden_window(&tx)?;
+     let handle = create_hidden_window(&tx)?;
 
     thread::spawn(move || {
         let mut port = try_connect_to_com();
@@ -192,10 +214,11 @@ fn main() -> windows::core::Result<()> {
         }
     }
 
+    handle.unregister_subs();
     Ok(())
 }
 
-fn create_hidden_window(tx: &Sender<LedbarCommandMessage>) -> windows::core::Result<()> {
+fn create_hidden_window(tx: &Sender<LedbarCommandMessage>) -> windows::core::Result<WindowHandle> {
     let tx_box = Box::new(tx.clone());
     let tx_ptr = Box::into_raw(tx_box);
 
@@ -224,13 +247,20 @@ fn create_hidden_window(tx: &Sender<LedbarCommandMessage>) -> windows::core::Res
             None,
             Some(instance),
             Some(tx_ptr.cast()),
-        );
+        )?;
 
-        if hwnd?.is_invalid() {
+        if hwnd.is_invalid() {
             panic!("CreateWindowExW failed.");
         }
-    };
-    Ok(())
+
+        let power_event_sub = RegisterSuspendResumeNotification(
+            HANDLE(hwnd.0), DEVICE_NOTIFY_WINDOW_HANDLE
+        )?;
+
+        Ok(WindowHandle {
+            power_event_sub
+        })
+    }
 }
 
 fn retry_if_closed(port: Result<Box<dyn SerialPort>, Error>) -> Result<Box<dyn SerialPort>, Error> {
