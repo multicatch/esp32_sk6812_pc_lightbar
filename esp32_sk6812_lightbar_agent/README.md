@@ -18,14 +18,23 @@ It listens to Windows events like "sleep", "resume" and "shut down" and then for
 3. Move the shortcut to `%appdata%/Microsoft/Windows/Start Menu/Programs/Startup` (you can paste this path into the explorer address bar).
 4. Restart your PC.
 
-## Resolving common issues
+## Command line options
 
-If this agent/controller doesn't connect to the ESP32, open main.rs and remove/comment the first line:
+```text
+Usage: esp32_sk6812_lightbar_agent.exe [OPTIONS]
 
-```rust
-//#![windows_subsystem = "windows"]
+Options:
+      --log <LOG>            Set logging level (trace, debug, info, warn, error). Default is 'warn'
+      --log-file <LOG_FILE>  Set output log file path
 ```
 
-Rebuild the project (`cargo build`). Run the exe file.
+## Resolving common issues
 
-Now you a terminal window should open, and you should see errors (if there are any).
+If this agent/controller doesn't connect to the ESP32, add `--log-file log_file_path.log` to the program arguments to save logs to file.
+Optionally, add `--log trace` to log everything.
+
+For example, you may edit the shortcut in `%appdata%/Microsoft/Windows/Start Menu/Programs/Startup` to add those arguments:
+![Screenshot showing shortcut properties with log file specified](../pic/program_arguments.jpg)
+
+This executable file cannot print anything to the stdout (because of how Windows handles background applications like this one).
+

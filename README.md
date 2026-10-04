@@ -14,7 +14,7 @@ The project assumes you have ports USB powered even if the PC is turned off (thu
 - Sleep “breathing” animation (requires USB power when suspended)
 - Animation with dithering and FPS lock for smooth and stable operation
 - The Windows app/agent autodetects the ESP32 controller (no need to configure anything, just run the app)
-- Windows app/agent is very lightweight (needs 0.7MB-0.9MB of RAM and Task Manager shows 0% CPU activity for this agent all the time)
+- Windows app/agent is very lightweight (needs 1.0MB of RAM and Task Manager shows 0% CPU activity for this agent all the time)
 
 ![Windows app/agent Task Manager resources](./pic/agenttaskmgr.jpg)
 
